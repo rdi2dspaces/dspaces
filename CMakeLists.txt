@@ -9,7 +9,7 @@
 #
 
 cmake_minimum_required (VERSION 3.0)
-project (dspaces VERSION 2.1.0 LANGUAGES C)
+project (dspaces VERSION 2.2.0 LANGUAGES C)
 #enable_testing ()
 
 include(GNUInstallDirs)
@@ -25,6 +25,17 @@ endif()
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
     ${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_BINDIR})
+endif()
+
+include(CMakeDependentOption)
+get_property(SHARED_LIBS_SUPPORTED GLOBAL PROPERTY TARGET_SUPPORTS_SHARED_LIBS)
+cmake_dependent_option(BUILD_SHARED_LIBS
+  "Build shared libraries (so/dylib/dll)." ${SHARED_LIBS_SUPPORTED}
+  "SHARED_LIBS_SUPPORTED" OFF
+)
+mark_as_advanced(BUILD_SHARED_LIBS)
+if((NOT BUILD_SHARED_LIBS) AND (NOT DEFINED CMAKE_POSITION_INDEPENDENT_CODE))
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
 option(ENABLE_TESTS    "Build tests" OFF)
