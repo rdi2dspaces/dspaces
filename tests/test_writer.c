@@ -162,8 +162,6 @@ int main(int argc, char **argv)
     if(npapp != nprocs) {
         fprintf(stderr,
                 "Product of np[i] args must equal number of MPI processes!\n");
-        fprintf(stderr,
-                "npapp=%d, nprocs=%d\n", npapp, nprocs);
         print_usage();
         return (-1);
     }
