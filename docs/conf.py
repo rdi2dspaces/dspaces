@@ -20,8 +20,8 @@
 # -- Project information -----------------------------------------------------
 
 project = u'DataSpaces'
-copyright = u'2021, Philip Davis'
-author = u'Philip Davis'
+copyright = u'2021, '
+author = u''
 
 # The short X.Y version
 version = u''
@@ -77,7 +77,7 @@ pygments_style = None
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'alabaster'
+html_theme = 'renku'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
