@@ -7,7 +7,7 @@ Welcome to DataSpaces's documentation!
 .. toctree::
    :maxdepth: 2
    
-   installation
+   installation.rst
 
 Indices and tables
 ==================
