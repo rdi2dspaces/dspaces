@@ -5,14 +5,12 @@ Welcome to DataSpaces's documentation!
 ======================================
 123
 
-
 Contents
 ========
 
 .. toctree::
-   :maxdepth: 2
    
-   installation.rst
+   installation
 
 Indices and tables
 ==================
