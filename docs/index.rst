@@ -12,6 +12,7 @@ moving data through shared memory and RDMA tranfers, rather than using the file 
 Like a shared file system, DataSpaces allow data readers to be decoupled from writers in both space in time.
 In other words, no sychronization of writers and readers is required, and readers may access data written by any process.
 
+
 Contents
 ========
 
@@ -21,7 +22,7 @@ Contents
    usage
    running
    optimization
-   troubleshooting
+   tshoot
    examples
 
 Indices and tables
