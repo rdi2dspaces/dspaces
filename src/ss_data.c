@@ -1491,38 +1491,25 @@ static obj_descriptor *dht_find_exact(const struct dht_entry *de,
  *
  */
 void dht_local_subscribe(struct dht_entry *de, obj_descriptor *q_odsc,
-                         obj_descriptor ***odsc_tab, int *tab_entries,
-                         long remaining, int timeout)
+                         obj_descriptor ***odsc_tab, int tab_entries,
+                         long remaining, int timeout, void *handle_v)
 {
-    struct dht_sub_list_entry sub;
+    struct dht_sub_list_entry *sub;
     obj_descriptor **odsc_tab_pos;
     struct obj_desc_ptr_list *odscl, *tmp;
     int n = q_odsc->version % de->odsc_size;
 
+    sub = malloc(sizeof(*sub));
     (void)timeout; // TODO: implement timeouts
-    sub.odsc = q_odsc;
-    sub.remaining = remaining;
-    sub.pub_count = 0;
-    INIT_LIST_HEAD(&sub.recv_odsc);
+    sub->odsc = q_odsc;
+    sub->remaining = remaining;
+    sub->pub_count = 0;
+    INIT_LIST_HEAD(&sub->recv_odsc);
+    sub->odsc_tab = *odsc_tab;
+    sub->num_odsc = tab_entries;
+    sub->handle_v = handle_v;
 
-    list_add(&sub.entry, &de->dht_subs[n]);
-
-    do {
-        ABT_cond_wait(de->hash_cond[n], de->hash_mutex[n]);
-    } while(sub.remaining > 0);
-
-    *odsc_tab =
-        realloc(*odsc_tab, sizeof(**odsc_tab) * (*tab_entries + sub.pub_count));
-    odsc_tab_pos = &(*odsc_tab)[*tab_entries];
-    list_for_each_entry_safe(odscl, tmp, &sub.recv_odsc,
-                             struct obj_desc_ptr_list, odsc_entry)
-    {
-        *odsc_tab_pos = odscl->odsc;
-        odsc_tab_pos++;
-        list_del(&odscl->odsc_entry);
-        free(odscl);
-    }
-    *tab_entries += sub.pub_count;
+    list_add(&sub->entry, &de->dht_subs[n]);
 }
 
 int dht_update_owner(struct dht_entry *de, obj_descriptor *odsc, int clear_flag)
@@ -1545,15 +1532,21 @@ int dht_update_owner(struct dht_entry *de, obj_descriptor *odsc, int clear_flag)
     return 0;
 }
 
-int dht_add_entry(struct dht_entry *de, obj_descriptor *odsc)
+int dht_add_entry(struct dht_entry *de, obj_descriptor *odsc, int *num_sub,
+                  struct dht_sub_list_entry ***sub_ret)
 {
     struct obj_desc_list *odscl;
-    struct obj_desc_ptr_list *sub_odscl;
+    struct obj_desc_ptr_list *sub_odscl, *tmp_od; // stuff for inner iterator
     struct dht_sub_list_entry *sub, *tmp;
     struct bbox isect;
     int sub_complete = 0;
+    struct dht_sub_list_entry **sub_ret_p;
+    struct list_head complete_sub;
+    obj_descriptor **odsc_tab_pos;
     int n, err = -ENOMEM;
 
+    *num_sub = 0;
+    INIT_LIST_HEAD(&complete_sub);
     odscl = dht_find_match(de, odsc);
     if(odscl) {
         /* There  is allready  a descriptor  with  a different
@@ -1596,13 +1589,36 @@ int dht_add_entry(struct dht_entry *de, obj_descriptor *odsc)
             bbox_intersect(&odsc->bb, &sub->odsc->bb, &isect);
             sub->remaining -= ssh_hash_elem_count(de->ss, &isect);
             if(sub->remaining == 0) {
-                sub_complete = 1;
+                sub_complete++;
                 list_del(&sub->entry);
+                list_add(&sub->entry, &complete_sub);
             }
         }
     }
     if(sub_complete) {
-        ABT_cond_broadcast(de->hash_cond[n]);
+        *num_sub = sub_complete;
+        *sub_ret = malloc(sizeof(**sub_ret) * sub_complete);
+        sub_ret_p = *sub_ret;
+        list_for_each_entry_safe(sub, tmp, &complete_sub,
+                                 struct dht_sub_list_entry, entry)
+        {
+            *sub_ret_p = sub;
+            sub_ret_p++;
+            sub->odsc_tab =
+                realloc(sub->odsc_tab, sizeof(*sub->odsc_tab) *
+                                           (sub->num_odsc + sub->pub_count));
+            odsc_tab_pos = &(sub->odsc_tab)[sub->num_odsc];
+            list_for_each_entry_safe(sub_odscl, tmp_od, &sub->recv_odsc,
+                                     struct obj_desc_ptr_list, odsc_entry)
+            {
+                *odsc_tab_pos = sub_odscl->odsc;
+                odsc_tab_pos++;
+                list_del(&sub_odscl->odsc_entry);
+                free(sub_odscl);
+            }
+            sub->num_odsc += sub->pub_count;
+        }
+        // ABT_cond_broadcast(de->hash_cond[n]);
     }
 
     ABT_mutex_unlock(de->hash_mutex[n]);
@@ -1615,7 +1631,7 @@ int dht_add_entry(struct dht_entry *de, obj_descriptor *odsc)
   number and references .
 */
 int dht_find_entry_all(struct dht_entry *de, obj_descriptor *q_odsc,
-                       obj_descriptor **odsc_tab[], int timeout)
+                       obj_descriptor **odsc_tab[], int timeout, void *handle_v)
 {
     int n, num_odsc = 0;
     long num_elem;
@@ -1641,8 +1657,10 @@ int dht_find_entry_all(struct dht_entry *de, obj_descriptor *q_odsc,
     }
     if(sub) {
         if(num_elem > 0) {
-            dht_local_subscribe(de, q_odsc, odsc_tab, &num_odsc, num_elem,
-                                timeout);
+            dht_local_subscribe(de, q_odsc, odsc_tab, num_odsc, num_elem,
+                                timeout, handle_v);
+            ABT_mutex_unlock(de->hash_mutex[n]);
+            return -1;
         }
         ABT_mutex_unlock(de->hash_mutex[n]);
     }

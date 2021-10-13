@@ -125,7 +125,6 @@ typedef struct {
     size_t gdim_size;
     char *raw_odsc;
     char *raw_gdim;
-
 } odsc_hdr_with_gdim;
 
 struct dht_sub_list_entry {
@@ -134,6 +133,9 @@ struct dht_sub_list_entry {
     int pub_count;
     struct list_head recv_odsc;
     struct list_head entry;
+    obj_descriptor **odsc_tab;
+    int num_odsc;
+    void *handle_v;
 };
 
 struct dht_entry {
@@ -289,7 +291,12 @@ MERCURY_GEN_PROC(query_meta_out_t,
                  ((hg_bulk_t)(handle))((hg_size_t)(size))((int32_t)(version)))
 MERCURY_GEN_PROC(odsc_gdim_t,
                  ((odsc_hdr_with_gdim)(odsc_gdim))((int32_t)(param)))
+MERCURY_GEN_PROC(odsc_int_t,
+                 ((odsc_hdr_with_gdim)(odsc_gdim))((int32_t)(param))(
+                     (uint64_t)(handle))((uint32_t)(idx))((int32_t)(src)))
 MERCURY_GEN_PROC(odsc_list_t, ((odsc_hdr)(odsc_list))((int32_t)(param)))
+MERCURY_GEN_PROC(odsc_reply_t,
+                 ((odsc_hdr)(odsc_list))((uint64_t)(handle))((uint32_t)(idx)))
 MERCURY_GEN_PROC(ss_information, ((odsc_hdr)(ss_buf)))
 
 char *obj_desc_sprint(obj_descriptor *);
@@ -311,10 +318,12 @@ int ssd_hash(struct sspace *, const struct bbox *, struct dht_entry *[]);
 
 int dht_update_owner(struct dht_entry *de, obj_descriptor *odsc,
                      int clear_flag);
-int dht_add_entry(struct dht_entry *, obj_descriptor *);
+int dht_add_entry(struct dht_entry *de, obj_descriptor *odsc, int *num_sub,
+                  struct dht_sub_list_entry ***sub_ret);
 obj_descriptor *dht_find_entry(struct dht_entry *, obj_descriptor *);
-int dht_find_entry_all(struct dht_entry *, obj_descriptor *,
-                       obj_descriptor **[], int);
+int dht_find_entry_all(struct dht_entry *de, obj_descriptor *q_odsc,
+                       obj_descriptor **odsc_tab[], int timeout,
+                       void *handle_v);
 int dht_find_versions(struct dht_entry *, obj_descriptor *, int[]);
 //
 struct meta_data *meta_find_entry(ss_storage *ls, const char *name, int version,
