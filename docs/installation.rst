@@ -20,7 +20,7 @@ Once you have done this, you can load the DataSpaces package repository by doing
 .. code-block:: console
 
    git clone https://github.com/rdi2dspaces/dspaces-spack.git
-   spack repo dspaces-spack
+   spack repo add dspaces-spack
 
 Installing DataSpaces
 ---------------------

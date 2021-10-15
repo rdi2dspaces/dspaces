@@ -14,4 +14,18 @@ This makes it possible to share data between applications written in different p
 Building a C/C++ program with DataSpaces
 ----------------------------------------
 
-Flags necessary for compiling a program that uses DataSpaces can be found from the pkg-config file installed by DataSpaces in `<INSTALL_ROOT>/lib/pkgconfig`
+Flags necessary for compiling a program that uses DataSpaces can be found from the pkg-config file installed by DataSpaces in `<INSTALL_ROOT>/lib/pkgconfig`.
+If installing using spack, the appropriate directory will be added to `PGK_CONFIG_PATH` when the dataspaces module is loaded. 
+`pkg-config` can provide useful information that depends on which flag is provided:
+
+.. code-block:: console
+    # Provides compilation flags for building a program that uses the dataspaces API
+    pkg-config --cflfags dspaces
+
+    # Provides linking flags for building a program that uses the dataspaces API
+    pkg-config --libs dspaces
+
+    # Provides the path to the dspaces_server binary
+    pkg-config --variable=exec_prefix dspaces
+
+
