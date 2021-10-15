@@ -42,3 +42,16 @@ The server produces a bootstrap file during its init phase, `conf.ds`. This file
 if `dspaces_init_mpi()` is being used. This file provides the clients with enough information to make initial contact with the server and
 perform wire-up. In order to find this file, the server and client application must be run in the same working directory, or at last a symlink of `ds.conf` should be present.
 
+Environment variables
+---------------------
+There are a few environment variables that can be used to influence DataSpaces.
+
+`DSPACES_DEBUG` - enables substantial debug output for both clients and server.
+
+`DSPACES_DEFAULT_NUM_HANDLERS` - the number of request handling threads launched by the server (in addition to the main thread). Default: 4.
+ This value should be changed if it is likely to oversubscribe or underutilize the node the server is running on.
+
+ Running the server
+ ------------------
+
+The server binary, `dspaces_server`, takes a single argument: the listen_address. This is a Mercury-specific connection string (see Mercury documentation for details.) Common values are: `sockets` to use TCP for communication, `sm` for shared memory (if all clienta and server processes are on the same node) and `ofi+X` for RDMA, where `X` is `verbs`, `psm2`, or `cray` as is appropriate for the system fabric.
