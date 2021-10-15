@@ -18,14 +18,17 @@ Flags necessary for compiling a program that uses DataSpaces can be found from t
 If installing using spack, the appropriate directory will be added to `PGK_CONFIG_PATH` when the dataspaces module is loaded. 
 `pkg-config` can provide useful information that depends on which flag is provided:
 
+    
+Provides compilation flags for building a program that uses the dataspaces API
 .. code-block:: console
-    # Provides compilation flags for building a program that uses the dataspaces API
-    pkg-config --cflfags dspaces
+    pkg-config --cflags dspaces
 
-    # Provides linking flags for building a program that uses the dataspaces API
+Provides linking flags for building a program that uses the dataspaces API
+.. code-block:: console
     pkg-config --libs dspaces
 
-    # Provides the path to the dspaces_server binary
+Provides the path to the dspaces_server binary
+.. code-block:: console
     pkg-config --variable=exec_prefix dspaces
 
 sfds
