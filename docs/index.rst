@@ -21,8 +21,7 @@ Contents
    installation
    usage
    running
-   optimization
-   tshoot
+   API
    examples
 
 Indices and tables
