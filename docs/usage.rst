@@ -20,15 +20,21 @@ If installing using spack, the appropriate directory will be added to `PGK_CONFI
 
     
 Provides compilation flags for building a program that uses the dataspaces API
+
 .. code-block:: console
+    
     pkg-config --cflags dspaces
 
 Provides linking flags for building a program that uses the dataspaces API
+
 .. code-block:: console
+    
     pkg-config --libs dspaces
 
 Provides the path to the dspaces_server binary
+
 .. code-block:: console
+    
     pkg-config --variable=exec_prefix dspaces
 
 sfds
