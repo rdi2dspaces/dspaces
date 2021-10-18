@@ -19,6 +19,9 @@ extern "C" {
 typedef struct dspaces_client *dspaces_client_t;
 #define dspaces_CLIENT_NULL ((dspaces_client_t)NULL)
 
+typedef struct dspaces_put_req *dspaces_put_req_t;
+#define dspaces_PUT_NULL ((dspaces_put_req_t)NULL)
+
 #define META_MODE_SPEC 1
 #define META_MODE_NEXT 2
 #define META_MODE_LAST 3
@@ -33,7 +36,8 @@ typedef struct dspaces_client *dspaces_client_t;
 int dspaces_init(int rank, dspaces_client_t *client);
 
 /**
- * @brief Creates a dspaces client. Uses MPI primitives for scalable initialization.
+ * @brief Creates a dspaces client. Uses MPI primitives for scalable
+ * initialization.
  * @param[in] comm: MPI communicator for reading configuration collectively.
  * @param[out] client dspaces client
  *
@@ -86,7 +90,64 @@ int dspaces_fini(dspaces_client_t client);
  * @return  0 indicates success.
  */
 int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
-                int size, int ndim, uint64_t *lb, uint64_t *ub, const void *data);
+                int size, int ndim, uint64_t *lb, uint64_t *ub,
+                const void *data);
+
+/**
+ * @brief Non-blocking query of the space to insert data specified by a
+ * geometric descriptor.
+ *
+ * Memory buffer pointed by pointer "data" is a sub-region of the
+ * global n-dimensional array in user application, which is described
+ * by the local bounding box {(lb[0],lb[1],..,lb[n-1]),
+ * (ub[0],ub[1],..,ub[n-1])}.
+ *
+ * This routine is non-blocking, and successful return of the routine does not
+ * guarantee the completion of data transfer from client process to dataspaces
+ * staging server.
+ *
+ * Note: ordering of dimension (fast->slow) is 0, 1, ..., n-1. For C row-major
+ * array, the dimensions need to be reordered to construct the bounding box. For
+ * example, the bounding box for C array c[2][4] is lb: {0,0}, ub: {3,1}.
+ *
+ * @param[in] client: dspaces client
+ * @param[in] var_name:     Name of the variable.
+ * @param[in] ver:      Version of the variable.
+ * @param[in] size:     Size (in bytes) for each element of the global
+ *              array.
+ * @param[in] ndim:     the number of dimensions for the local bounding
+ *              box.
+ * @param[in] lb:       coordinates for the lower corner of the local
+ *                  bounding box.
+ * @param[in] ub:       coordinates for the upper corner of the local
+ *                  bounding box.
+ * @param[in] data:     Pointer to user data buffer.
+ *
+ * @param[in] allocate: allocate a buffer to enable immediate reuse of data
+ *
+ * @param[in] check: check for any completed iputs before processing this one
+ *
+ * @return put handle
+ */
+struct dspaces_put_req *dspaces_iput(dspaces_client_t client,
+                                     const char *var_name, unsigned int ver,
+                                     int size, int ndim, uint64_t *lb,
+                                     uint64_t *ub, const void *data,
+                                     int allocate, int check);
+
+/**
+ * @brief Check status of non-blocking put
+ *
+ * Check completion status of non-blocking put.
+ *
+ * @param[in] client: dspaces client
+ * @param[in] req: put request handle
+ * @param[in] wait: wait for request to complete
+ *
+ * @return 0 indicates success
+ */
+int dspaces_check_put(dspaces_client_t client, struct dspaces_put_req *req,
+                      int wait);
 
 /**
  * @brief Query the space to insert data specified by a geometric
@@ -289,7 +350,7 @@ void dspaces_kill(dspaces_client_t client);
  *
  * @return zero for success, non-zero for failure
  */
-int dspaces_put_meta(dspaces_client_t client, char *name, int version,
+int dspaces_put_meta(dspaces_client_t client, const char *name, int version,
                      const void *data, unsigned int len);
 
 /**
@@ -314,9 +375,8 @@ int dspaces_put_meta(dspaces_client_t client, char *name, int version,
  * @param[out] data: the results buffer
  * @param[out] len: the size of the results buffer in bytes
  */
-int dspaces_get_meta(dspaces_client_t client, char *name, int mode,
-                     int current, int *version, void **data,
-                     unsigned int *len);
+int dspaces_get_meta(dspaces_client_t client, const char *name, int mode,
+                     int current, int *version, void **data, unsigned int *len);
 
 #if defined(__cplusplus)
 }

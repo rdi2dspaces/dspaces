@@ -19,18 +19,23 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define DEBUG_OUT(args...)                                                     \
+#ifdef HAVE_DRC
+#include <rdmacred.h>
+#endif /* HAVE_DRC */
+
+#define DEBUG_OUT(...)                                                         \
     do {                                                                       \
         if(server->f_debug) {                                                  \
             fprintf(stderr, "Rank %i: %s, line %i (%s): ", server->rank,       \
                     __FILE__, __LINE__, __func__);                             \
-            fprintf(stderr, args);                                             \
+            fprintf(stderr, __VA_ARGS__);                                      \
         }                                                                      \
     } while(0);
 
 #define DSPACES_DEFAULT_NUM_HANDLERS 4
 
-static enum storage_type st = column_major;
+// TODO !
+// static enum storage_type st = column_major;
 
 typedef enum obj_update_type { DS_OBJ_NEW, DS_OBJ_OWNER } obj_update_t;
 
@@ -68,6 +73,10 @@ struct dspaces_provider {
     int f_drain;
     int f_kill;
 
+#ifdef HAVE_DRC
+    uint32_t drc_credential_id;
+#endif
+
     MPI_Comm comm;
 
     ABT_mutex odsc_mutex;
@@ -81,17 +90,17 @@ struct dspaces_provider {
     ABT_thread drain_t;
 };
 
-DECLARE_MARGO_RPC_HANDLER(put_rpc);
-DECLARE_MARGO_RPC_HANDLER(put_local_rpc);
-DECLARE_MARGO_RPC_HANDLER(put_meta_rpc);
-DECLARE_MARGO_RPC_HANDLER(get_rpc);
-DECLARE_MARGO_RPC_HANDLER(query_rpc);
-DECLARE_MARGO_RPC_HANDLER(query_meta_rpc);
-DECLARE_MARGO_RPC_HANDLER(obj_update_rpc);
-DECLARE_MARGO_RPC_HANDLER(odsc_internal_rpc);
-DECLARE_MARGO_RPC_HANDLER(ss_rpc);
-DECLARE_MARGO_RPC_HANDLER(kill_rpc);
-DECLARE_MARGO_RPC_HANDLER(sub_rpc);
+DECLARE_MARGO_RPC_HANDLER(put_rpc)
+DECLARE_MARGO_RPC_HANDLER(put_local_rpc)
+DECLARE_MARGO_RPC_HANDLER(put_meta_rpc)
+DECLARE_MARGO_RPC_HANDLER(get_rpc)
+DECLARE_MARGO_RPC_HANDLER(query_rpc)
+DECLARE_MARGO_RPC_HANDLER(query_meta_rpc)
+DECLARE_MARGO_RPC_HANDLER(obj_update_rpc)
+DECLARE_MARGO_RPC_HANDLER(odsc_internal_rpc)
+DECLARE_MARGO_RPC_HANDLER(ss_rpc)
+DECLARE_MARGO_RPC_HANDLER(kill_rpc)
+DECLARE_MARGO_RPC_HANDLER(sub_rpc)
 
 static void put_rpc(hg_handle_t h);
 static void put_local_rpc(hg_handle_t h);
@@ -260,7 +269,8 @@ static int write_conf(dspaces_provider_t server, MPI_Comm comm)
     int *sizes_psum;
     char *str_buf;
     FILE *fd;
-    int i, ret;
+    int i;
+    int ret = 0;
 
     hret = margo_addr_self(server->mid, &my_addr);
     if(hret != HG_SUCCESS) {
@@ -346,6 +356,9 @@ static int write_conf(dspaces_provider_t server, MPI_Comm comm)
                     server->server_address[i]);
         }
         fprintf(fd, "%s\n", server->listen_addr_str);
+#ifdef HAVE_DRC
+        fprintf(fd, "%" PRIu32 "\n", server->drc_credential_id);
+#endif
         fclose(fd);
     }
 
@@ -532,7 +545,7 @@ static int obj_update_dht(dspaces_provider_t server, struct obj_data *od,
     ABT_mutex_unlock(server->sspace_mutex);
     struct dht_entry *dht_tab[ssd->dht->num_entries];
 
-    int num_de, i, err;
+    int num_de, i;
 
     /* Compute object distribution to nodes in the space. */
     num_de = ssd_hash(ssd, &odsc->bb, dht_tab);
@@ -564,6 +577,7 @@ static int obj_update_dht(dspaces_provider_t server, struct obj_data *od,
         // now send rpc to the server for dht_update
         hg_return_t hret;
         odsc_gdim_t in;
+        margo_request req;
         DEBUG_OUT("Server %d sending object %s to dht server %d \n",
                   server->dsg->rank, obj_desc_sprint(odsc), dht_tab[i]->rank);
 
@@ -579,7 +593,7 @@ static int obj_update_dht(dspaces_provider_t server, struct obj_data *od,
 
         hg_handle_t h;
         margo_create(server->mid, svr_addr, server->obj_update_id, &h);
-        margo_forward(h, &in);
+        margo_iforward(h, &in, &req);
         DEBUG_OUT("sent obj server %d to update dht %s in \n", dht_tab[i]->rank,
                   obj_desc_sprint(odsc));
 
@@ -702,7 +716,6 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
     hg_bool_t flag;
     hg_id_t id;
     int num_handlers = DSPACES_DEFAULT_NUM_HANDLERS;
-    int ret;
 
     if(is_initialized) {
         fprintf(stderr,
@@ -731,10 +744,64 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
     MPI_Comm_dup(comm, &server->comm);
     MPI_Comm_rank(comm, &server->rank);
 
+    margo_set_environment(NULL);
     ABT_init(0, NULL);
+
+#ifdef HAVE_DRC
+
+    server->drc_credential_id = 0;
+    if(server->rank == 0) {
+        ret =
+            drc_acquire(&server->drc_credential_id, DRC_FLAGS_FLEX_CREDENTIAL);
+        if(ret != DRC_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): drc_acquire failure %d\n", __func__,
+                    ret);
+            return ret;
+        }
+    }
+    MPI_Bcast(&server->drc_credential_id, 1, MPI_UINT32_T, 0, comm);
+
+    /* access credential on all ranks and convert to string for use by mercury
+     */
+
+    drc_info_handle_t drc_credential_info;
+    uint32_t drc_cookie;
+    char drc_key_str[256] = {0};
+
+    ret = drc_access(server->drc_credential_id, 0, &drc_credential_info);
+    if(ret != DRC_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): drc_access failure %d\n", __func__, ret);
+        return ret;
+    }
+
+    drc_cookie = drc_get_first_cookie(drc_credential_info);
+    sprintf(drc_key_str, "%u", drc_cookie);
+
+    struct hg_init_info hii;
+    memset(&hii, 0, sizeof(hii));
+    hii.na_init_info.auth_key = drc_key_str;
+
+    /* rank 0 grants access to the credential, allowing other jobs to use it */
+    if(server->rank == 0) {
+        ret = drc_grant(server->drc_credential_id, drc_get_wlm_id(),
+                        DRC_FLAGS_TARGET_WLM);
+        if(ret != DRC_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): drc_grants failure %d\n", __func__,
+                    ret);
+            return ret;
+        }
+    }
+
+    server->mid = margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, &hii, 1,
+                                 num_handlers);
+
+#else
 
     server->mid =
         margo_init(listen_addr_str, MARGO_SERVER_MODE, 1, num_handlers);
+
+#endif /* HAVE_DRC */
+
     if(!server->mid) {
         fprintf(stderr, "ERROR: %s: margo_init() failed.\n", __func__);
         return (dspaces_ERR_MERCURY);
@@ -742,11 +809,11 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
 
     server->listen_addr_str = strdup(listen_addr_str);
 
-    ret = ABT_mutex_create(&server->odsc_mutex);
-    ret = ABT_mutex_create(&server->ls_mutex);
-    ret = ABT_mutex_create(&server->dht_mutex);
-    ret = ABT_mutex_create(&server->sspace_mutex);
-    ret = ABT_mutex_create(&server->kill_mutex);
+    ABT_mutex_create(&server->odsc_mutex);
+    ABT_mutex_create(&server->ls_mutex);
+    ABT_mutex_create(&server->dht_mutex);
+    ABT_mutex_create(&server->sspace_mutex);
+    ABT_mutex_create(&server->kill_mutex);
 
     hg = margo_get_class(server->mid);
 
@@ -859,7 +926,6 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
         margo_registered_disable_response(server->mid, server->notify_id,
                                           HG_TRUE);
     }
-    int size_sp = 1;
     int err = dsg_alloc(server, "dataspaces.conf", comm);
     if(err) {
         fprintf(stderr,
@@ -891,11 +957,12 @@ static void kill_client(dspaces_provider_t server, char *client_addr)
 {
     hg_addr_t server_addr;
     hg_handle_t h;
+    margo_request req;
     int arg = -1;
 
     margo_addr_lookup(server->mid, client_addr, &server_addr);
     margo_create(server->mid, server_addr, server->kill_client_id, &h);
-    margo_forward(h, &arg);
+    margo_iforward(h, &arg, &req);
     margo_addr_free(server->mid, server_addr);
     margo_destroy(h);
 }
@@ -950,8 +1017,6 @@ static void kill_local_clients(dspaces_provider_t server)
 
 static int server_destroy(dspaces_provider_t server)
 {
-    int i;
-
     MPI_Barrier(server->comm);
     DEBUG_OUT("Finishing up, waiting for asynchronous jobs to finish...\n");
 
@@ -979,6 +1044,8 @@ static int server_destroy(dspaces_provider_t server)
     MPI_Comm_free(&server->comm);
     DEBUG_OUT("finalizing server.\n");
     margo_finalize(server->mid);
+
+    return 0;
 }
 
 static void put_rpc(hg_handle_t handle)
@@ -1031,7 +1098,6 @@ static void put_rpc(hg_handle_t handle)
 
     hg_size_t size = (in_odsc.size) * bbox_volume(&(in_odsc.bb));
 
-    void *buffer = (void *)od->data;
     hret = margo_bulk_create(mid, 1, (void **)&(od->data), &size,
                              HG_BULK_WRITE_ONLY, &bulk_handle);
 
@@ -1224,7 +1290,7 @@ static void put_meta_rpc(hg_handle_t handle)
 DEFINE_MARGO_RPC_HANDLER(put_meta_rpc)
 
 static int get_query_odscs(dspaces_provider_t server, odsc_gdim_t *query,
-                           int timeout, obj_descriptor **results)
+                           int timeout, obj_descriptor **results, int req_id)
 {
     struct sspace *ssd;
     struct dht_entry **de_tab;
@@ -1379,6 +1445,10 @@ static void query_rpc(hg_handle_t handle)
     int timeout;
     obj_descriptor *results;
     hg_return_t hret;
+    static int uid = 0;
+    int req_id;
+
+    req_id = __sync_fetch_and_add(&uid, 1);
 
     // unwrap context and input from margo
     mid = margo_hg_handle_get_instance(handle);
@@ -1402,7 +1472,8 @@ static void query_rpc(hg_handle_t handle)
     DEBUG_OUT("Received query for %s with timeout %d",
               obj_desc_sprint(&in_odsc), timeout);
 
-    out.odsc_list.size = get_query_odscs(server, &in, timeout, &results);
+    out.odsc_list.size =
+        get_query_odscs(server, &in, timeout, &results, req_id);
 
     out.odsc_list.raw_odsc = (char *)results;
     margo_respond(handle, &out);
@@ -1589,7 +1660,7 @@ static void odsc_internal_rpc(hg_handle_t handle)
     DEBUG_OUT("Received query for %s with timeout %d\n",
               obj_desc_sprint(&in_odsc), timeout);
 
-    obj_descriptor odsc, *odsc_tab;
+    obj_descriptor *odsc_tab;
     ABT_mutex_lock(server->sspace_mutex);
     struct sspace *ssd = lookup_sspace(server, in_odsc.name, &od_gdim);
     ABT_mutex_unlock(server->sspace_mutex);
@@ -1704,6 +1775,8 @@ static void ss_rpc(hg_handle_t handle)
     dspaces_provider_t server =
         (dspaces_provider_t)margo_registered_data(mid, info->id);
 
+    DEBUG_OUT("received ss_rpc\n");
+
     ss_info_hdr ss_data;
     ss_data.num_dims = ds_conf.ndim;
     ss_data.num_space_srv = server->dsg->size_sp;
@@ -1720,6 +1793,7 @@ static void ss_rpc(hg_handle_t handle)
     out.ss_buf.size = sizeof(ss_info_hdr);
     out.ss_buf.raw_odsc = (char *)(&ss_data);
     margo_respond(handle, &out);
+    DEBUG_OUT("responded in %s\n", __func__);
     margo_destroy(handle);
 }
 DEFINE_MARGO_RPC_HANDLER(ss_rpc)
@@ -1729,11 +1803,12 @@ static void send_kill_rpc(dspaces_provider_t server, int target, int *rank)
     // TODO: error handling/reporting
     hg_addr_t server_addr;
     hg_handle_t h;
+    margo_request req;
 
     margo_addr_lookup(server->mid, server->server_address[target],
                       &server_addr);
     margo_create(server->mid, server_addr, server->kill_id, &h);
-    margo_forward(h, rank);
+    margo_iforward(h, rank, &req);
     margo_addr_free(server->mid, server_addr);
     margo_destroy(h);
 }
@@ -1746,9 +1821,8 @@ static void kill_rpc(hg_handle_t handle)
         (dspaces_provider_t)margo_registered_data(mid, info->id);
     int32_t src, rank, parent, child1, child2;
     int do_kill = 0;
-    hg_return_t hret;
 
-    hret = margo_get_input(handle, &src);
+    margo_get_input(handle, &src);
     DEBUG_OUT("Received kill signal from %d.\n", src);
 
     rank = server->dsg->rank;
@@ -1800,14 +1874,17 @@ static void sub_rpc(hg_handle_t handle)
     odsc_list_t notice;
     odsc_gdim_t in;
     int32_t sub_id;
-    hg_return_t hret;
     obj_descriptor in_odsc;
     obj_descriptor *results;
     struct global_dimension in_gdim;
     hg_addr_t client_addr;
     hg_handle_t notifyh;
+    margo_request req;
+    static int uid = 0;
+    int req_id;
 
-    hret = margo_get_input(handle, &in);
+    req_id = __sync_fetch_and_add(&uid, 1L);
+    margo_get_input(handle, &in);
 
     memcpy(&in_odsc, in.odsc_gdim.raw_odsc, sizeof(in_odsc));
     memcpy(&in_gdim, in.odsc_gdim.raw_gdim, sizeof(struct global_dimension));
@@ -1817,13 +1894,13 @@ static void sub_rpc(hg_handle_t handle)
               obj_desc_sprint(&in_odsc), sub_id, in_odsc.owner);
 
     in.param = -1; // this will be interpreted as timeout by any interal queries
-    notice.odsc_list.size = get_query_odscs(server, &in, -1, &results);
+    notice.odsc_list.size = get_query_odscs(server, &in, -1, &results, req_id);
     notice.odsc_list.raw_odsc = (char *)results;
     notice.param = sub_id;
 
     margo_addr_lookup(server->mid, in_odsc.owner, &client_addr);
     margo_create(server->mid, client_addr, server->notify_id, &notifyh);
-    margo_forward(notifyh, &notice);
+    margo_iforward(notifyh, &notice, &req);
     margo_addr_free(server->mid, client_addr);
     margo_destroy(notifyh);
 

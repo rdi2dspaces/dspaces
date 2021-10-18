@@ -18,20 +18,24 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#ifdef HAVE_DRC
+#include <rdmacred.h>
+#endif /* HAVE_DRC */
+
 #include <mpi.h>
 
-#define DEBUG_OUT(args...)                                                     \
+#define DEBUG_OUT(...)                                                         \
     do {                                                                       \
         if(client->f_debug) {                                                  \
             fprintf(stderr, "Rank %i: %s, line %i (%s): ", client->rank,       \
                     __FILE__, __LINE__, __func__);                             \
-            fprintf(stderr, args);                                             \
+            fprintf(stderr, __VA_ARGS__);                                      \
         }                                                                      \
     } while(0);
 
 #define SUB_HASH_SIZE 16
 
-static int g_is_initialized = 0;
+// static int g_is_initialized = 0;
 
 static enum storage_type st = column_major;
 
@@ -49,6 +53,16 @@ struct sub_list_node {
     struct sub_list_node *next;
     struct dspaces_sub_handle *subh;
     int id;
+};
+
+struct dspaces_put_req {
+    hg_handle_t handle;
+    margo_request req;
+    struct dspaces_put_req *next;
+    bulk_gdim_t in;
+    int finalized;
+    void *buffer;
+    hg_return_t ret;
 };
 
 struct dspaces_client {
@@ -77,11 +91,17 @@ struct dspaces_client {
     int f_debug;
     int f_final;
     int listener_init;
+    struct dspaces_put_req *put_reqs;
+    struct dspaces_put_req *put_reqs_end;
 
     int sub_serial;
     struct sub_list_node *sub_lists[SUB_HASH_SIZE];
     struct sub_list_node *done_list;
     int pending_sub;
+
+#ifdef HAVE_DRC
+    uint32_t drc_credential_id;
+#endif /* HAVE_DRC */
 
     ABT_mutex ls_mutex;
     ABT_mutex drain_mutex;
@@ -92,13 +112,12 @@ struct dspaces_client {
     ABT_xstream listener_xs;
 };
 
-DECLARE_MARGO_RPC_HANDLER(get_local_rpc);
-static void get_rpc(hg_handle_t h);
-DECLARE_MARGO_RPC_HANDLER(drain_rpc);
+DECLARE_MARGO_RPC_HANDLER(get_local_rpc)
+DECLARE_MARGO_RPC_HANDLER(drain_rpc)
 static void drain_rpc(hg_handle_t h);
-DECLARE_MARGO_RPC_HANDLER(kill_client_rpc);
+DECLARE_MARGO_RPC_HANDLER(kill_client_rpc)
 static void kill_client_rpc(hg_handle_t h);
-DECLARE_MARGO_RPC_HANDLER(notify_rpc);
+DECLARE_MARGO_RPC_HANDLER(notify_rpc)
 static void notify_rpc(hg_handle_t h);
 
 // round robin fashion
@@ -157,10 +176,7 @@ static int get_ss_info(dspaces_client_t client)
     hg_handle_t handle;
     ss_information out;
     hg_addr_t server_addr;
-    hg_size_t my_addr_size;
     int ret = dspaces_SUCCESS;
-
-    char *my_addr_str = NULL;
 
     get_server_address(client, &server_addr);
 
@@ -171,13 +187,14 @@ static int get_ss_info(dspaces_client_t client)
         return dspaces_ERR_MERCURY;
     }
 
+    DEBUG_OUT("Sending ss_rpc\n");
     hret = margo_forward(handle, NULL);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s):  margo_forward() failed\n", __func__);
         margo_destroy(handle);
         return dspaces_ERR_MERCURY;
     }
-
+    DEBUG_OUT("Got ss_rpc reply\n");
     hret = margo_get_output(handle, &out);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
@@ -205,8 +222,8 @@ static int get_ss_info(dspaces_client_t client)
 static struct dc_gspace *dcg_alloc(dspaces_client_t client)
 {
     struct dc_gspace *dcg_l;
-    int i;
 
+    (void)client;
     dcg_l = calloc(1, sizeof(*dcg_l));
     if(!dcg_l)
         goto err_out;
@@ -219,101 +236,6 @@ static struct dc_gspace *dcg_alloc(dspaces_client_t client)
 err_out:
     fprintf(stderr, "'%s()': failed.\n", __func__);
     return NULL;
-}
-
-static int build_address(dspaces_client_t client)
-{
-    /* open config file for reading */
-    int ret;
-    struct stat st;
-    char *rd_buf = NULL;
-    ssize_t rd_buf_size;
-    char *tok;
-    void *addr_str_buf = NULL;
-    int addr_str_buf_len = 0, num_addrs = 0;
-    int wait_time, time = 0;
-    int fd;
-    char *file_name = "servids.0";
-
-    do {
-        fd = open(file_name, O_RDONLY);
-        if(fd == -1) {
-            if(errno == ENOENT) {
-                DEBUG_OUT("unable to find config file %s after %d seconds, "
-                          "will try again...\n",
-                          file_name, time);
-            } else {
-                fprintf(stderr, "ERROR: could not open config file %s.\n",
-                        file_name);
-                goto fini;
-            }
-            wait_time = (rand() % 3) + 1;
-            time += wait_time;
-            sleep(wait_time);
-        }
-    } while(fd == -1);
-
-    /* get file size and allocate a buffer to store it */
-    ret = fstat(fd, &st);
-    if(ret == -1) {
-        fprintf(
-            stderr,
-            "Error: Unable to stat config file %s for server_address list\n",
-            file_name);
-        goto fini;
-    }
-    ret = -1;
-    rd_buf = malloc(st.st_size);
-    if(rd_buf == NULL)
-        goto fini;
-
-    /* load it all in one fell swoop */
-    rd_buf_size = read(fd, rd_buf, st.st_size);
-    if(rd_buf_size != st.st_size) {
-        fprintf(
-            stderr,
-            "Error: Unable to stat config file %s for server_address list\n",
-            file_name);
-        goto fini;
-    }
-    rd_buf[rd_buf_size] = '\0';
-
-    // strtok the result - each space-delimited address is assumed to be
-    // a unique mercury address
-
-    tok = strtok(rd_buf, "\r\n\t ");
-    if(tok == NULL)
-        goto fini;
-
-    // build up the address buffer
-    addr_str_buf = malloc(rd_buf_size);
-    if(addr_str_buf == NULL)
-        goto fini;
-    do {
-        int tok_size = strlen(tok);
-        memcpy((char *)addr_str_buf + addr_str_buf_len, tok, tok_size + 1);
-        addr_str_buf_len += tok_size + 1;
-        num_addrs++;
-        tok = strtok(NULL, "\r\n\t ");
-    } while(tok != NULL);
-    if(addr_str_buf_len != rd_buf_size) {
-        // adjust buffer size if our initial guess was wrong
-        fprintf(stderr, "Read size and buffer_len are not equal\n");
-        void *tmp = realloc(addr_str_buf, addr_str_buf_len);
-        if(tmp == NULL)
-            goto fini;
-        addr_str_buf = tmp;
-    }
-    free(rd_buf);
-
-    /* set up address string array for group members */
-    client->server_address =
-        (char **)addr_str_buf_to_list(addr_str_buf, num_addrs);
-    client->size_sp = num_addrs;
-    ret = 0;
-
-fini:
-    return ret;
 }
 
 FILE *open_conf_ds(dspaces_client_t client)
@@ -372,6 +294,11 @@ static int read_conf(dspaces_client_t client, char **listen_addr_str)
     fsetpos(fd, &lstart);
     *listen_addr_str = malloc(size + 1);
     fscanf(fd, "%s\n", *listen_addr_str);
+
+#ifdef HAVE_DRC
+    fgetpos(fd, &lstart);
+    fscanf(fd, "%" SCNu32, &client->drc_credential_id);
+#endif
     fclose(fd);
 
     ret = 0;
@@ -435,6 +362,11 @@ static int read_conf_mpi(dspaces_client_t client, MPI_Comm comm,
     *listen_addr_str = malloc(size + 1);
     fscanf(conf, "%s\n", *listen_addr_str);
 
+#ifdef HAVE_DRC
+    fgetpos(conf, &lstart);
+    fscanf(conf, "%" SCNu32, &client->drc_credential_id);
+#endif
+
     fclose(conf);
     free(file_buf);
 
@@ -482,9 +414,37 @@ static int dspaces_init_margo(dspaces_client_t client,
     hg_class_t *hg;
     int i;
 
+    margo_set_environment(NULL);
     ABT_init(0, NULL);
 
+#ifdef HAVE_DRC
+    int ret = 0;
+    drc_info_handle_t drc_credential_info;
+    uint32_t drc_cookie;
+    char drc_key_str[256] = {0};
+
+    ret = drc_access(client->drc_credential_id, 0, &drc_credential_info);
+    if(ret != DRC_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): drc_access failure %d\n", __func__, ret);
+        return ret;
+    }
+
+    drc_cookie = drc_get_first_cookie(drc_credential_info);
+    sprintf(drc_key_str, "%u", drc_cookie);
+
+    struct hg_init_info hii;
+    memset(&hii, 0, sizeof(hii));
+    hii.na_init_info.auth_key = drc_key_str;
+
+    client->mid =
+        margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, &hii, 0, 0);
+
+#else
+
     client->mid = margo_init(listen_addr_str, MARGO_SERVER_MODE, 0, 0);
+
+#endif /* HAVE_DRC */
+
     if(!client->mid) {
         fprintf(stderr, "ERROR: %s: margo_init() failed.\n", __func__);
         return (dspaces_ERR_MERCURY);
@@ -698,6 +658,10 @@ int dspaces_fini(dspaces_client_t client)
         ABT_mutex_unlock(client->drain_mutex);
     } while(client->local_put_count > 0);
 
+    while(client->put_reqs) {
+        dspaces_check_put(client, client->put_reqs, 1);
+    }
+
     DEBUG_OUT("all objects drained. Finalizing...\n");
 
     free_gdim_list(&client->dcg->gdim_list);
@@ -724,12 +688,11 @@ void dspaces_define_gdim(dspaces_client_t client, const char *var_name,
     }
 }
 
-int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
-                int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
-                const void *data)
+static int setup_put(dspaces_client_t client, const char *var_name,
+                     unsigned int ver, int elem_size, int ndim, uint64_t *lb,
+                     uint64_t *ub, const void *data, hg_addr_t *server_addr,
+                     hg_handle_t *handle, bulk_gdim_t *in)
 {
-    hg_addr_t server_addr;
-    hg_handle_t handle;
     hg_return_t hret;
     int ret = dspaces_SUCCESS;
 
@@ -751,8 +714,65 @@ int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
     strncpy(odsc.name, var_name, sizeof(odsc.name) - 1);
     odsc.name[sizeof(odsc.name) - 1] = '\0';
 
+    struct global_dimension odsc_gdim;
+    set_global_dimension(&(client->dcg->gdim_list), var_name,
+                         &(client->dcg->default_gdim), &odsc_gdim);
+
+    in->odsc.size = sizeof(odsc);
+    in->odsc.raw_odsc = (char *)(&odsc);
+    in->odsc.gdim_size = sizeof(struct global_dimension);
+    in->odsc.raw_gdim = (char *)(&odsc_gdim);
+    hg_size_t rdma_size = (elem_size)*bbox_volume(&odsc.bb);
+
+    DEBUG_OUT("sending object %s \n", obj_desc_sprint(&odsc));
+    // int *a = NULL;
+    // int b = *a;
+    hret = margo_bulk_create(client->mid, 1, (void **)&data, &rdma_size,
+                             HG_BULK_READ_ONLY, &in->handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
+        return dspaces_ERR_MERCURY;
+    }
+
+    get_server_address(client, server_addr);
+    /* create handle */
+    hret = margo_create(client->mid, *server_addr, client->put_id, handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
+        margo_bulk_free(in->handle);
+        return dspaces_ERR_MERCURY;
+    }
+}
+
+int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
+                int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
+                const void *data)
+{
+    hg_addr_t server_addr;
+    hg_handle_t handle;
+    hg_return_t hret;
     bulk_gdim_t in;
     bulk_out_t out;
+    int ret = dspaces_SUCCESS;
+
+    obj_descriptor odsc = {.version = ver,
+                           .owner = {0},
+                           .st = st,
+                           .flags = 0,
+                           .size = elem_size,
+                           .bb = {
+                               .num_dims = ndim,
+                           }};
+
+    memset(odsc.bb.lb.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+    memset(odsc.bb.ub.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+
+    memcpy(odsc.bb.lb.c, lb, sizeof(uint64_t) * ndim);
+    memcpy(odsc.bb.ub.c, ub, sizeof(uint64_t) * ndim);
+
+    strncpy(odsc.name, var_name, sizeof(odsc.name) - 1);
+    odsc.name[sizeof(odsc.name) - 1] = '\0';
+
     struct global_dimension odsc_gdim;
     set_global_dimension(&(client->dcg->gdim_list), var_name,
                          &(client->dcg->default_gdim), &odsc_gdim);
@@ -773,7 +793,7 @@ int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
     }
 
     get_server_address(client, &server_addr);
-    /* create handle */
+
     hret = margo_create(client->mid, server_addr, client->put_id, &handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
@@ -803,6 +823,212 @@ int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
     margo_destroy(handle);
     margo_addr_free(client->mid, server_addr);
     return ret;
+}
+
+static int finalize_req(struct dspaces_put_req *req)
+{
+    bulk_out_t out;
+    int ret;
+    hg_return_t hret;
+
+    hret = margo_get_output(req->handle, &out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
+        margo_bulk_free(req->in.handle);
+        margo_destroy(req->handle);
+        return dspaces_ERR_MERCURY;
+    }
+    ret = out.ret;
+    margo_free_output(req->handle, &out);
+    margo_bulk_free(req->in.handle);
+    margo_destroy(req->handle);
+
+    if(req->buffer) {
+        free(req->buffer);
+        req->buffer = NULL;
+    }
+
+    req->finalized = 1;
+    req->ret = ret;
+
+    return ret;
+}
+
+struct dspaces_put_req *dspaces_iput(dspaces_client_t client,
+                                     const char *var_name, unsigned int ver,
+                                     int elem_size, int ndim, uint64_t *lb,
+                                     uint64_t *ub, const void *data, int alloc,
+                                     int check)
+{
+    hg_addr_t server_addr;
+    hg_return_t hret;
+    struct dspaces_put_req *ds_req, *ds_req_prev, **ds_req_p;
+    int ret = dspaces_SUCCESS;
+    const void *buffer;
+    int flag;
+
+    if(check) {
+        // Check for comleted iputs
+        ds_req_prev = NULL;
+        ds_req_p = &client->put_reqs;
+        while(*ds_req_p) {
+            ds_req = *ds_req_p;
+            flag = 0;
+            if(!ds_req->finalized) {
+                margo_test(ds_req->req, &flag);
+                if(flag) {
+                    finalize_req(ds_req);
+                    if(!ds_req->next) {
+                        client->put_reqs_end = ds_req_prev;
+                    }
+                    *ds_req_p = ds_req->next;
+                    // do not free ds_req yet - user might do a
+                    // dspaces_check_put later
+                }
+            }
+            ds_req_prev = ds_req;
+            ds_req_p = &ds_req->next;
+        }
+    }
+
+    ds_req = calloc(1, sizeof(*ds_req));
+    obj_descriptor odsc = {.version = ver,
+                           .owner = {0},
+                           .st = st,
+                           .flags = 0,
+                           .size = elem_size,
+                           .bb = {
+                               .num_dims = ndim,
+                           }};
+
+    memset(odsc.bb.lb.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+    memset(odsc.bb.ub.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+
+    memcpy(odsc.bb.lb.c, lb, sizeof(uint64_t) * ndim);
+    memcpy(odsc.bb.ub.c, ub, sizeof(uint64_t) * ndim);
+
+    strncpy(odsc.name, var_name, sizeof(odsc.name) - 1);
+    odsc.name[sizeof(odsc.name) - 1] = '\0';
+
+    struct global_dimension odsc_gdim;
+    set_global_dimension(&(client->dcg->gdim_list), var_name,
+                         &(client->dcg->default_gdim), &odsc_gdim);
+
+    ds_req->in.odsc.size = sizeof(odsc);
+    ds_req->in.odsc.raw_odsc = (char *)(&odsc);
+    ds_req->in.odsc.gdim_size = sizeof(struct global_dimension);
+    ds_req->in.odsc.raw_gdim = (char *)(&odsc_gdim);
+    hg_size_t rdma_size = (elem_size)*bbox_volume(&odsc.bb);
+
+    if(alloc) {
+        ds_req->buffer = malloc(rdma_size);
+        memcpy(ds_req->buffer, data, rdma_size);
+        buffer = ds_req->buffer;
+    } else {
+        buffer = data;
+    }
+
+    DEBUG_OUT("sending object %s \n", obj_desc_sprint(&odsc));
+
+    hret = margo_bulk_create(client->mid, 1, (void **)&buffer, &rdma_size,
+                             HG_BULK_READ_ONLY, &ds_req->in.handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
+        return dspaces_PUT_NULL;
+    }
+
+    get_server_address(client, &server_addr);
+
+    hret =
+        margo_create(client->mid, server_addr, client->put_id, &ds_req->handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
+        margo_bulk_free(ds_req->in.handle);
+        return dspaces_PUT_NULL;
+    }
+
+    hret = margo_iforward(ds_req->handle, &ds_req->in, &ds_req->req);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_forward() failed\n", __func__);
+        margo_bulk_free(ds_req->in.handle);
+        margo_destroy(ds_req->handle);
+        return dspaces_PUT_NULL;
+    }
+
+    margo_addr_free(client->mid, server_addr);
+
+    ds_req->next = NULL;
+    if(client->put_reqs_end) {
+        client->put_reqs_end->next = ds_req;
+        client->put_reqs_end = ds_req;
+    } else {
+        client->put_reqs = client->put_reqs_end = ds_req;
+    }
+
+    return ds_req;
+}
+
+int dspaces_check_put(dspaces_client_t client, struct dspaces_put_req *req,
+                      int wait)
+{
+    int flag;
+    struct dspaces_put_req **ds_req_p, *ds_req_prev;
+    int ret;
+    hg_return_t hret;
+
+    if(req->finalized) {
+        ret = req->ret;
+        free(req);
+        return ret;
+    }
+
+    if(wait) {
+        hret = margo_wait(req->req);
+        if(hret == HG_SUCCESS) {
+            ds_req_prev = NULL;
+            ds_req_p = &client->put_reqs;
+            while(*ds_req_p && *ds_req_p != req) {
+                ds_req_prev = *ds_req_p;
+                ds_req_p = &((*ds_req_p)->next);
+            }
+            if(!ds_req_p) {
+                fprintf(stderr,
+                        "ERROR: put req finished, but was not saved.\n");
+                return (-1);
+            } else {
+                ret = finalize_req(req);
+                if(req->next == NULL) {
+                    client->put_reqs_end = ds_req_prev;
+                }
+                *ds_req_p = req->next;
+                free(req);
+                return ret;
+            }
+        }
+    } else {
+        margo_test(req->req, &flag);
+        if(flag) {
+            ds_req_prev = NULL;
+            ds_req_p = &client->put_reqs;
+            while(*ds_req_p && *ds_req_p != req) {
+                ds_req_prev = *ds_req_p;
+                ds_req_p = &((*ds_req_p)->next);
+            }
+            if(!ds_req_p) {
+                fprintf(stderr,
+                        "ERROR: put req finished, but was not saved.\n");
+                return (-1);
+            } else {
+                ret = finalize_req(req);
+                if(req->next == NULL) {
+                    client->put_reqs_end = ds_req_prev;
+                }
+                *ds_req_p = req->next;
+                free(req);
+            }
+        }
+        return flag;
+    }
 }
 
 static int get_data(dspaces_client_t client, int num_odscs,
@@ -867,6 +1093,8 @@ static int get_data(dspaces_client_t client, int num_odscs,
     free(serv_req);
     free(in);
     free(return_od);
+
+    return 0;
 }
 
 static int dspaces_init_listener(dspaces_client_t client)
@@ -898,7 +1126,7 @@ static int dspaces_init_listener(dspaces_client_t client)
     return (ret);
 }
 
-int dspaces_put_meta(dspaces_client_t client, char *name, int version,
+int dspaces_put_meta(dspaces_client_t client, const char *name, int version,
                      const void *data, unsigned int len)
 {
     hg_addr_t server_addr;
@@ -1157,7 +1385,7 @@ int dspaces_aget(dspaces_client_t client, const char *var_name,
     *data = malloc(num_elem * elem_size);
     get_data(client, num_odscs, odsc, odsc_tab, *data);
 
-    return 0;
+    return ret;
 }
 
 int dspaces_get(dspaces_client_t client, const char *var_name, unsigned int ver,
@@ -1184,11 +1412,11 @@ int dspaces_get(dspaces_client_t client, const char *var_name, unsigned int ver,
     if(num_odscs != 0)
         get_data(client, num_odscs, odsc, odsc_tab, data);
 
-    return (0);
+    return (ret);
 }
 
-int dspaces_get_meta(dspaces_client_t client, char *name, int mode, int current,
-                     int *version, void **data, unsigned int *len)
+int dspaces_get_meta(dspaces_client_t client, const char *name, int mode,
+                     int current, int *version, void **data, unsigned int *len)
 {
     query_meta_in_t in;
     query_meta_out_t out;
@@ -1467,7 +1695,7 @@ static struct dspaces_sub_handle *dspaces_get_sub(dspaces_client_t client,
                                                   int sub_id)
 {
     int listidx = sub_id % SUB_HASH_SIZE;
-    struct sub_list_node *node, **nodep;
+    struct sub_list_node *node;
 
     node = client->sub_lists[listidx];
     while(node) {
@@ -1487,7 +1715,6 @@ static void dspaces_move_sub(dspaces_client_t client, int sub_id)
 {
     int listidx = sub_id % SUB_HASH_SIZE;
     struct sub_list_node *node, **nodep;
-    struct dspaces_sub_handle *subh;
 
     nodep = &client->sub_lists[listidx];
     while(*nodep && (*nodep)->id != sub_id) {
@@ -1533,7 +1760,6 @@ static void notify_rpc(hg_handle_t handle)
     obj_descriptor *odsc_tab;
     void *data;
     size_t data_size;
-    int is_cancelled = 0;
     int i;
 
     margo_get_input(handle, &in);
@@ -1566,6 +1792,10 @@ static void notify_rpc(hg_handle_t handle)
             get_data(client, num_odscs, subh->q_odsc, odsc_tab, data);
         }
     } else {
+        fprintf(stderr,
+                "WARNING: got notification, but sub status was not "
+                "DSPACES_SUB_WAIT (%i)\n",
+                subh->status);
         ABT_mutex_unlock(client->sub_mutex);
         odsc_tab = NULL;
         data = NULL;
@@ -1627,6 +1857,7 @@ struct dspaces_sub_handle *dspaces_sub(dspaces_client_t client,
 {
     hg_addr_t my_addr, server_addr;
     hg_handle_t handle;
+    margo_request req;
     hg_return_t hret;
     struct dspaces_sub_handle *subh;
     odsc_gdim_t in;
@@ -1665,6 +1896,7 @@ struct dspaces_sub_handle *dspaces_sub(dspaces_client_t client,
     client->pending_sub++;
     subh->id = client->sub_serial++;
     register_client_sub(client, subh);
+    subh->status = DSPACES_SUB_WAIT;
     ABT_mutex_unlock(client->sub_mutex);
 
     memset(subh->q_odsc.bb.lb.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
@@ -1700,7 +1932,7 @@ struct dspaces_sub_handle *dspaces_sub(dspaces_client_t client,
                 hret);
         return (DSPACES_SUB_FAIL);
     }
-    hret = margo_forward(handle, &in);
+    hret = margo_iforward(handle, &in, &req);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: %s: margo_forward() failed with %d.\n",
                 __func__, hret);
@@ -1709,7 +1941,6 @@ struct dspaces_sub_handle *dspaces_sub(dspaces_client_t client,
     }
 
     DEBUG_OUT("subscription %d sent.\n", subh->id);
-    subh->status = DSPACES_SUB_WAIT;
 
     margo_addr_free(client->mid, server_addr);
     margo_destroy(handle);
@@ -1783,6 +2014,7 @@ void dspaces_kill(dspaces_client_t client)
     uint32_t in;
     hg_addr_t server_addr;
     hg_handle_t h;
+    margo_request req;
     hg_return_t hret;
 
     in = -1;
@@ -1796,7 +2028,7 @@ void dspaces_kill(dspaces_client_t client)
         margo_addr_free(client->mid, server_addr);
         return;
     }
-    margo_forward(h, &in);
+    margo_iforward(h, &in, &req);
 
     DEBUG_OUT("kill signal sent.\n");
 

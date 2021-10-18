@@ -8,8 +8,12 @@
 #      -DCMAKE_PREFIX_PATH='/dir1;/dir2;/dir3'
 #
 
-cmake_minimum_required (VERSION 3.0)
+cmake_minimum_required (VERSION 3.14)
 project (dspaces VERSION 2.2.0 LANGUAGES C)
+
+cmake_policy(SET CMP0078 NEW)
+cmake_policy(SET CMP0086 NEW)
+
 #enable_testing ()
 
 include(GNUInstallDirs)
@@ -39,6 +43,8 @@ if((NOT BUILD_SHARED_LIBS) AND (NOT DEFINED CMAKE_POSITION_INDEPENDENT_CODE))
 endif()
 
 option(ENABLE_TESTS    "Build tests" OFF)
+set(DSPACES_PYTHON_BINDINGS AUTO CACHE STRING  "Build Python bindings")
+set_property(CACHE DSPACES_PYTHON_BINDINGS PROPERTY STRINGS "ON;TRUE;AUTO;OFF;FALSE")
 
 # add our cmake module directory to the path
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
@@ -55,6 +61,8 @@ set (BUILD_SHARED_LIBS "OFF" CACHE BOOL "Build a shared library")
 include (xpkg-import)
 xpkg_import_module (margo REQUIRED margo)
 
+include(python_bindings)
+
 find_package(MPI COMPONENTS REQUIRED)
 
 include(CheckLanguage)
@@ -63,7 +71,12 @@ if(CMAKE_Fortran_COMPILER)
     enable_language(Fortran)
 endif()
 if(CMAKE_Fortran_COMPILER_LOADED)
+    include(CheckFortranCompilerFlag)
     set(DSPACES_HAVE_FORTRAN TRUE)
+    check_fortran_compiler_flag("-fallow-argument-mismatch" FORTRAN_HAS_ARG_MISMATCH_FLAG)
+    if(FORTRAN_HAS_ARG_MISMATCH_FLAG)
+        SET(CMAKE_Fortran_FLAGS "${CMAKE_CXX_FLAGS} -fallow-argument-mismatch")
+    endif()
 endif()
 
 add_subdirectory(src)
@@ -74,5 +87,11 @@ if(${ENABLE_TESTS})
   add_subdirectory(tests)
 endif(${ENABLE_TESTS})
 if(${ENABLE_EXAMPLES})
-  add_subdirectory(examples)
+    configure_file(
+        ${PROJECT_SOURCE_DIR}/examples/opts.mk.in
+        ${PROJECT_BINARY_DIR}/examples/opts.mk
+        @ONLY
+    )
+    file(GLOB EXAMPLE_DIRS ${PROJECT_SOURCE_DIR}/examples/ex*)
+    file(COPY ${PROJECT_SOURCE_DIR}/examples/Makefile ${EXAMPLE_DIRS} DESTINATION ${PROJECT_BINARY_DIR}/examples)
 endif(${ENABLE_EXAMPLES})
