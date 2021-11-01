@@ -1766,6 +1766,7 @@ static void query_respond(dspaces_provider_t server, struct query_handle *qh)
     free(results);
     free(qh->odsc_tabs);
     free(qh->odsc_nums);
+    ABT_mutex_unlock(qh->query_mutex);
     ABT_mutex_free(&qh->query_mutex);
     free(qh);
 }
@@ -1782,8 +1783,9 @@ static void do_query_result(dspaces_provider_t server, struct query_handle *qh,
     DEBUG_OUT("still waiting on %i responses\n", qh->remaining);
     if(qh->remaining == 0) {
         query_respond(server, qh);
+    } else {
+        ABT_mutex_unlock(qh->query_mutex);
     }
-    ABT_mutex_unlock(qh->query_mutex);
 }
 
 static void internal_reply_rpc(hg_handle_t handle)

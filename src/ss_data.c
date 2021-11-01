@@ -1542,7 +1542,7 @@ int dht_add_entry(struct dht_entry *de, obj_descriptor *odsc, int *num_sub,
     int sub_complete = 0;
     struct dht_sub_list_entry **sub_ret_p;
     struct list_head complete_sub;
-    obj_descriptor **odsc_tab_pos;
+    obj_descriptor **odsc_tab, **odsc_tab_pos;
     int n, err = -ENOMEM;
 
     *num_sub = 0;
@@ -1604,9 +1604,13 @@ int dht_add_entry(struct dht_entry *de, obj_descriptor *odsc, int *num_sub,
         {
             *sub_ret_p = sub;
             sub_ret_p++;
-            sub->odsc_tab =
-                realloc(sub->odsc_tab, sizeof(*sub->odsc_tab) *
-                                           (sub->num_odsc + sub->pub_count));
+            fprintf(stderr, "sub->num_odsc = %i,  sub->pub_count = %i\n", sub->num_odsc, sub->pub_count);
+            odsc_tab = malloc(sizeof(*sub->odsc_tab) * (sub->num_odsc + sub->pub_count));
+            if(sub->num_odsc) {
+                memcpy(odsc_tab, sub->odsc_tab, sizeof(*sub->odsc_tab) * sub->num_odsc);
+                free(sub->odsc_tab);
+            }
+            sub->odsc_tab = odsc_tab;
             odsc_tab_pos = &(sub->odsc_tab)[sub->num_odsc];
             list_for_each_entry_safe(sub_odscl, tmp_od, &sub->recv_odsc,
                                      struct obj_desc_ptr_list, odsc_entry)
