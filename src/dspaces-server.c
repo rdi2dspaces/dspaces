@@ -122,7 +122,6 @@ static struct {
     int ndim;
     struct coord dims;
     int max_versions;
-    int max_readers;
     int hash_version; /* 1 - ssd_hash_version_v1, 2 - ssd_hash_version_v2 */
     int num_apps;
 } ds_conf;
@@ -133,7 +132,6 @@ static struct {
 } options[] = {{"ndim", &ds_conf.ndim},
                {"dims", (int *)&ds_conf.dims},
                {"max_versions", &ds_conf.max_versions},
-               {"max_readers", &ds_conf.max_readers},
                {"hash_version", &ds_conf.hash_version},
                {"num_apps", &ds_conf.num_apps}};
 
@@ -440,6 +438,25 @@ error:
     return (ret);
 }
 
+void print_conf()
+{
+    int i;
+
+    printf("DataSpaces server config:\n");
+    printf("=========================\n");
+    printf(" Default global dimensions: (");
+    printf("%" PRIu64, ds_conf.dims.c[0]);
+    for(i = 1; i < ds_conf.ndim; i++) {
+        printf(", %" PRIu64, ds_conf.dims.c[i]);
+    }
+    printf(")\n");
+    printf(" MAX STORED VERSIONS: %i\n", ds_conf.max_versions);
+    printf(" HASH TYPE: %s\n",
+           (ds_conf.hash_version == 1) ? "SFC" : "Bisection");
+    printf(" APPS EXPECTED: %i\n", ds_conf.num_apps);
+    printf("=========================\n");
+}
+
 static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
                      MPI_Comm comm)
 {
@@ -449,7 +466,6 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
 
     /* Default values */
     ds_conf.max_versions = 1;
-    ds_conf.max_readers = 1;
     ds_conf.hash_version = ssd_hash_version_v1;
     ds_conf.num_apps = 1;
 
@@ -499,6 +515,10 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
     MPI_Comm_size(comm, &(dsg_l->size_sp));
 
     MPI_Comm_rank(comm, &dsg_l->rank);
+
+    if(dsg_l->rank == 0) {
+        print_conf();
+    }
 
     write_conf(server, comm);
 

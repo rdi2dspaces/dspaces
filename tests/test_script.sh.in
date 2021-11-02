@@ -10,7 +10,6 @@ echo "## Config file for DataSpaces
 ndim = 3
 dims = 256,256,256
 max_versions = 8
-max_readers = 8
 num_apps = 2
 " > dataspaces.conf
 
@@ -18,7 +17,6 @@ echo "## Config file for DataSpaces
 [server]
 dims = [ 256, 256, 256 ]
 max_versions = 8
-max_readers = 8
 num_apps = 2
 " > dspaces.toml
 
