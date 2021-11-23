@@ -1872,7 +1872,7 @@ static void odsc_internal_rpc(hg_handle_t handle)
     qlog->src = in.src;
     qlog->idx = in.idx;
     qlog->in_odsc = in_odsc;
-    num_odsc = dht_find_entry_all(ssd->ent_self, &in_odsc, &podsc, timeout,
+    num_odsc = dht_find_entry_all(ssd->ent_self, &qlog->in_odsc, &podsc, timeout,
                                   (void *)qlog);
     DEBUG_OUT("found %d DHT entries.\n", num_odsc);
     if(num_odsc >= 0) {
