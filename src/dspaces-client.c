@@ -18,6 +18,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <cuda.h>
+#include <cuda_runtime_api.h>
 
 #ifdef HAVE_DRC
 #include <rdmacred.h>
