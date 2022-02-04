@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <cuda.h>
 
 #ifdef HAVE_DRC
 #include <rdmacred.h>
