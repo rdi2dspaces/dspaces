@@ -23,7 +23,7 @@ if(HAVE_DRC)
     target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${DRC_INCLUDE_DIRS})
 else()
     target_link_libraries (dspaces margo m pthread CUDA::cudart CUDA::cuda_driver)
-    target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include>)
+    target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${CUDAToolkit_INCLUDE_DIRS})
 endif()
 
 # local include's BEFORE, in case old incompatable .h files in prefix/include
