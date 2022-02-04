@@ -868,7 +868,7 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
     curet = cudaMemcpyAsync(buffer, data, rdma_size, cudaMemcpyDeviceToHost, stream);
     if(curet != cudaSuccess) {
         fprintf(stderr, "ERROR: (%s): cudaMemcpyAsync() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
-        cudaStreamDestory(stream);
+        cudaStreamDestroy(stream);
         free(buffer);
         return dspaces_ERR_CUDA;
     }
@@ -904,7 +904,7 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
     curet = cudaStreamSynchronize(stream);
     if(curet != cudaSuccess) {
         fprintf(stderr, "ERROR: (%s): cudaStreamSynchronize() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
-        cudaStreamDestory(stream);
+        cudaStreamDestroy(stream);
         free(buffer);
         return dspaces_ERR_CUDA;
     }
@@ -925,6 +925,8 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
         return dspaces_ERR_MERCURY;
     }
 
+    free(buffer);
+
     ret = out.ret;
     margo_free_output(handle, &out);
     margo_bulk_free(in.handle);
@@ -933,9 +935,7 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
 
     curet = cudaStreamDestroy(stream);
     if(curet != cudaSuccess) {
-        fprintf(stderr, "ERROR: (%s): cudaStreamDestroy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
-        cudaStreamDestory(stream);
-        free(buffer);
+        fprintf(stderr, "ERROR: (%s): cudaStreamDestroy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet))
         return dspaces_ERR_CUDA;
     }
 
