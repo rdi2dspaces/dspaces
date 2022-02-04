@@ -935,7 +935,7 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
 
     curet = cudaStreamDestroy(stream);
     if(curet != cudaSuccess) {
-        fprintf(stderr, "ERROR: (%s): cudaStreamDestroy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet))
+        fprintf(stderr, "ERROR: (%s): cudaStreamDestroy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
         return dspaces_ERR_CUDA;
     }
 
