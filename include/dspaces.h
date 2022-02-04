@@ -377,6 +377,14 @@ int dspaces_put_meta(dspaces_client_t client, const char *name, int version,
 int dspaces_get_meta(dspaces_client_t client, const char *name, int mode,
                      int current, int *version, void **data, unsigned int *len);
 
+int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int ver,
+                int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
+                const void *data);
+
+int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int ver,
+                     int elem_size, int ndim, uint64_t *lb, uint64_t *ub, void *data,
+                     int timeout);
+
 #if defined(__cplusplus)
 }
 #endif
