@@ -1537,6 +1537,40 @@ int dspaces_get(dspaces_client_t client, const char *var_name, unsigned int ver,
     return (ret);
 }
 
+int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int ver,
+                     int elem_size, int ndim, uint64_t *lb, uint64_t *ub, void *data,
+                     int timeout)
+{
+    obj_descriptor odsc;
+    obj_descriptor *odsc_tab;
+    int num_odscs;
+    int ret = dspaces_SUCCESS;
+    int curet;
+
+    fill_odsc(var_name, ver, elem_size, ndim, lb, ub, &odsc);
+
+    DEBUG_OUT("Querying %s with timeout %d\n", obj_desc_sprint(&odsc), timeout);
+
+    num_odscs = get_odscs(client, &odsc, timeout, &odsc_tab);
+
+    DEBUG_OUT("Finished query - need to fetch %d objects\n", num_odscs);
+    for(int i = 0; i < num_odscs; ++i) {
+        DEBUG_OUT("%s\n", obj_desc_sprint(&odsc_tab[i]));
+    }
+
+    // send request to get the obj_desc
+    if(num_odscs != 0) {
+        size_t rdma_size = elem_size*bbox_volume(&odsc.bb);
+        void* buffer = (void*) malloc(rdma_size);
+        get_data(client, num_odscs, odsc, odsc_tab, buffer);
+        curet = cudaMemcpy(data, buffer, rdma_size, cudaMemcpyHostToDevice);
+        free(buffer);
+        free(odsc_tab);
+    }
+
+    return (ret);
+}
+
 int dspaces_get_meta(dspaces_client_t client, const char *name, int mode,
                      int current, int *version, void **data, unsigned int *len)
 {
