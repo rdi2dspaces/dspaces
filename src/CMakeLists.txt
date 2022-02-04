@@ -4,6 +4,8 @@ if(HAVE_DRC)
     add_definitions( -DHAVE_DRC)
 endif()
 
+find_package(CUDAToolkit)
+
 # list of source files
 set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c)
 
@@ -20,7 +22,7 @@ if(HAVE_DRC)
     target_link_libraries (dspaces margo m pthread ${DRC_LIBRARIES})
     target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${DRC_INCLUDE_DIRS})
 else()
-    target_link_libraries (dspaces margo m pthread)
+    target_link_libraries (dspaces margo m pthread CUDA::cudart CUDA::cuda_driver)
     target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include>)
 endif()
 
