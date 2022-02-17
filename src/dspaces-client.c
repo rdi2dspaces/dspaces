@@ -1564,6 +1564,10 @@ int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int
         void* buffer = (void*) malloc(rdma_size);
         get_data(client, num_odscs, odsc, odsc_tab, buffer);
         curet = cudaMemcpy(data, buffer, rdma_size, cudaMemcpyHostToDevice);
+        if(curet != cudaSuccess) {
+            fprintf(stderr, "ERROR: (%s): cudaMemcpy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
+            ret = dspaces_ERR_CUDA;
+        }
         free(buffer);
         free(odsc_tab);
     }
