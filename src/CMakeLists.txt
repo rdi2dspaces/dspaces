@@ -34,6 +34,7 @@ else()
         set_target_properties(dspaces PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
         target_link_libraries (dspaces margo m pthread)
         target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include>)
+    endif()
 endif()
 
 # local include's BEFORE, in case old incompatable .h files in prefix/include
