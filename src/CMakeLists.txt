@@ -4,7 +4,10 @@ if(HAVE_DRC)
     add_definitions( -DHAVE_DRC)
 endif()
 
-find_package(CUDAToolkit)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.17)
+    find_package(CUDAToolkit)
+else
+    enable_language(CUDA)
 
 # list of source files
 set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c)
