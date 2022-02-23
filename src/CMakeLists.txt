@@ -6,8 +6,9 @@ endif()
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.17)
     find_package(CUDAToolkit)
-else
+else()
     enable_language(CUDA)
+endif()
 
 # list of source files
 set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c)
