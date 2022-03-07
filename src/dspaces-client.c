@@ -92,6 +92,7 @@ struct dspaces_client {
     int local_put_count; // used during finalize
     int f_debug;
     int f_final;
+    int f_gdr;
     int listener_init;
     struct dspaces_put_req *put_reqs;
     struct dspaces_put_req *put_reqs_end;
@@ -378,6 +379,7 @@ static int read_conf_mpi(dspaces_client_t client, MPI_Comm comm,
 static int dspaces_init_internal(int rank, dspaces_client_t *c)
 {
     const char *envdebug = getenv("DSPACES_DEBUG");
+    const char *envgdr = getenv("DSPACES_GDR");
     static int is_initialized = 0;
 
     if(is_initialized) {
@@ -393,6 +395,10 @@ static int dspaces_init_internal(int rank, dspaces_client_t *c)
 
     if(envdebug) {
         client->f_debug = 1;
+    }
+
+    if(envgdr){
+        client->f_gdr = 1;
     }
 
     client->rank = rank;
@@ -827,7 +833,7 @@ int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
     return ret;
 }
 
-int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int ver,
+static int cuda_put_pipeline(dspaces_client_t client, const char *var_name, unsigned int ver,
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
                 const void *data)
 {
@@ -939,6 +945,91 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
         return dspaces_ERR_CUDA;
     }
 
+    return ret;
+}
+
+static int cuda_put_gdr(dspaces_client_t client, const char *var_name, unsigned int ver,
+                int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
+                const void *data)
+{
+    hg_addr_t server_addr;
+    hg_handle_t handle;
+    hg_return_t hret;
+    bulk_gdim_t in;
+    bulk_out_t out;
+    int ret = dspaces_SUCCESS;
+
+    memset(odsc.bb.lb.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+    memset(odsc.bb.ub.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+
+    memcpy(odsc.bb.lb.c, lb, sizeof(uint64_t) * ndim);
+    memcpy(odsc.bb.ub.c, ub, sizeof(uint64_t) * ndim);
+
+    strncpy(odsc.name, var_name, sizeof(odsc.name) - 1);
+    odsc.name[sizeof(odsc.name) - 1] = '\0';
+
+    struct global_dimension odsc_gdim;
+    set_global_dimension(&(client->dcg->gdim_list), var_name,
+                         &(client->dcg->default_gdim), &odsc_gdim);
+
+    in.odsc.size = sizeof(odsc);
+    in.odsc.raw_odsc = (char *)(&odsc);
+    in.odsc.gdim_size = sizeof(struct global_dimension);
+    in.odsc.raw_gdim = (char *)(&odsc_gdim);
+    hg_size_t rdma_size = (elem_size)*bbox_volume(&odsc.bb);
+
+    DEBUG_OUT("sending object %s \n", obj_desc_sprint(&odsc));
+
+    hret = margo_bulk_create(client->mid, 1, (void **)&data, &rdma_size,
+                             HG_BULK_READ_ONLY, &in.handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
+        return dspaces_ERR_MERCURY;
+    }
+
+    get_server_address(client, &server_addr);
+
+    hret = margo_create(client->mid, server_addr, client->put_id, &handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    hret = margo_forward(handle, &in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_forward() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        margo_destroy(handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    hret = margo_get_output(handle, &out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        margo_destroy(handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    ret = out.ret;
+    margo_free_output(handle, &out);
+    margo_bulk_free(in.handle);
+    margo_destroy(handle);
+    margo_addr_free(client->mid, server_addr);
+    return ret;
+}
+
+int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int ver,
+                int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
+                const void *data)
+{
+    int ret = dspaces_SUCCESS;
+    if(client->f_gdr) {
+        ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
+    } else {
+        ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+    }
     return ret;
 }
 
