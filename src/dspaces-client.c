@@ -959,6 +959,15 @@ static int cuda_put_gdr(dspaces_client_t client, const char *var_name, unsigned 
     bulk_out_t out;
     int ret = dspaces_SUCCESS;
 
+    obj_descriptor odsc = {.version = ver,
+                           .owner = {0},
+                           .st = st,
+                           .flags = 0,
+                           .size = elem_size,
+                           .bb = {
+                               .num_dims = ndim,
+                           }};
+
     memset(odsc.bb.lb.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
     memset(odsc.bb.ub.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
 
