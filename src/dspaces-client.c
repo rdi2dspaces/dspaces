@@ -448,8 +448,10 @@ static int dspaces_init_margo(dspaces_client_t client,
         margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, &hii, 0, 0);
 
 #else
-
-    client->mid = margo_init(listen_addr_str, MARGO_SERVER_MODE, 0, 0);
+    struct hg_init_info hii;
+    memset(&hii, 0, sizeof(hii));
+    hii.no_bulk_eager=1;
+    client->mid = margo_init(listen_addr_str, MARGO_SERVER_MODE, &hii, 0, 0);
 
 #endif /* HAVE_DRC */
 
