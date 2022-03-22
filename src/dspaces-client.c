@@ -24,6 +24,10 @@
 #include <rdmacred.h>
 #endif /* HAVE_DRC */
 
+#ifdef HAVE_GDRCOPY
+#include <gdrapi.h>
+#endif
+
 #include <mpi.h>
 
 #define DEBUG_OUT(...)                                                         \
@@ -36,6 +40,48 @@
     } while(0);
 
 #define SUB_HASH_SIZE 16
+
+#define CUDA_ASSERT(x)                                                          \
+    do                                                                          \
+        {                                                                       \
+            if (!(x))                                                           \
+                {                                                               \
+                    fprintf(stderr, "Rank %i: %s, line %i (%s):"                \
+                            "Assertion %s failed!\n",                           \
+                            client->rank, __FILE__, __LINE__, __func__, #x);    \
+                    return dspaces_ERR_CUDA;                                    \
+                }                                                               \
+        } while (0)
+
+#define CUDA_ASSERTRT(stmt)				                                        \
+    do                                                                          \
+        {                                                                       \
+            cudaError_t err = (stmt);                                           \
+            if (err != cudaSuccess) {                                           \
+                fprintf(stderr, "Rank %i: %s, line %i (%s):"                    \
+                        "%s failed, Err Code: (%s)\n",                          \
+                        client->rank, __FILE__, __LINE__, __func__, #stmt,      \
+                        cudaGetErrorString(err));                               \
+            }                                                                   \
+            CUDA_ASSERT(CUDA_SUCCESS == result);                                \
+        } while (0)
+
+#define CUDA_ASSERTDRV(stmt)				                                    \
+    do                                                                          \
+        {                                                                       \
+            CUresult result = (stmt);                                           \
+            if (result != CUDA_SUCCESS) {                                       \
+                const char *_err_name;                                          \
+                cuGetErrorName(result, &_err_name);                             \
+                fprintf(stderr, "Rank %i: %s, line %i (%s):"                    \
+                        "%s failed, Err Code: (%s)\n",                          \
+                        client->rank, __FILE__, __LINE__, __func__, #stmt,      \
+                        _err_name);                                             \
+            }                                                                   \
+            CUDA_ASSERT(CUDA_SUCCESS == result);                                \
+        } while (0)
+
+#define CUDA_MEM_ALIGN(x, n)     (((x) + ((n) - 1)) & ~((n) - 1))
 
 // static int g_is_initialized = 0;
 
@@ -56,6 +102,21 @@ struct sub_list_node {
     struct dspaces_sub_handle *subh;
     int id;
 };
+
+enum dspaces_cuda_dev_mode {dspaces_CUDA_PIPELINE, dspaces_CUDA_GDR, dspaces_CUDA_GDRCOPY};
+
+struct dspaces_cuda_dev_info {
+    enum dspaces_cuda_dev_mode mode;
+};
+
+struct dspaces_cuda_info {
+    int dev_num;
+    struct dspaces_cuda_dev_info *dev_list;
+#ifdef HAVE_GDRCOPY
+    gdr_t gdrcopy_handle;
+#endif
+};
+
 
 struct dspaces_put_req {
     hg_handle_t handle;
@@ -93,6 +154,7 @@ struct dspaces_client {
     int f_debug;
     int f_final;
     int f_gdr;
+    struct dspaces_cuda_info cuda_info;
     int listener_init;
     struct dspaces_put_req *put_reqs;
     struct dspaces_put_req *put_reqs_end;
@@ -379,7 +441,6 @@ static int read_conf_mpi(dspaces_client_t client, MPI_Comm comm,
 static int dspaces_init_internal(int rank, dspaces_client_t *c)
 {
     const char *envdebug = getenv("DSPACES_DEBUG");
-    const char *envgdr = getenv("DSPACES_GDR");
     static int is_initialized = 0;
 
     if(is_initialized) {
@@ -397,10 +458,6 @@ static int dspaces_init_internal(int rank, dspaces_client_t *c)
         client->f_debug = 1;
     }
 
-    if(envgdr){
-        client->f_gdr = 1;
-    }
-
     client->rank = rank;
 
     // now do dcg_alloc and store gid
@@ -412,6 +469,157 @@ static int dspaces_init_internal(int rank, dspaces_client_t *c)
     is_initialized = 1;
 
     *c = client;
+
+    return dspaces_SUCCESS;
+}
+
+#ifdef HAVE_GDRCOPY
+static int check_gdrcopy_support_dev(dspaces_client_t client, int dev_rank)
+{
+    int gdr_support;
+    int cur_dev_rank;
+
+    CUDA_ASSERTRT(cudaGetDevice(&cur_dev_rank));
+    CUDA_ASSERTRT(cudaSetDevice(dev_rank));
+
+    #if CUDA_VERSION >= 11030
+    int drv_version;
+    CUDA_ASSERTDRV(cuDriverGetVersion(&drv_version));
+    // Starting from CUDA 11.3, CUDA provides an ability to check GPUDirect RDMA support.
+    if(drv_version >= 11030) {
+        CUdevice dev;
+        CUDA_ASSERTDRV(cuDeviceGet(&dev, data_dev_rank));
+        CUDA_ASSERTDRV(cuDeviceGetAttribute(&gdr_support, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED, dev));
+        CUDA_ASSERTRT(cudaSetDevice(cur_dev_rank));
+        return gdr_support;
+    }
+    #endif
+
+    // For older versions, we fall back to detect this support with gdr_pin_buffer.
+    const size_t buf_size = GPU_PAGE_SIZE;
+    CUdeviceptr d_A;
+    
+    // Malloc page-aligned memory on device
+    CUdeviceptr ptr;
+    size_t allocated_size;
+    allocated_size = buf_size + GPU_PAGE_SIZE - 1;
+    CUDA_ASSERTDRV(cuMemAlloc(&ptr, allocated_size));
+
+    // Don't need sync control since we are just checking gdrcopy support
+
+    d_A = CUDA_MEM_ALIGN(ptr, GPU_PAGE_SIZE);
+
+    // gdr_t gdr = gdr_open();
+    // if(!gdr) {
+    //     // fprintf(stderr, "ERROR: (%s): gdr_open() failed, is gdrdrv driver installed and loaded?\n", __func__);
+    //     gdr_support = 0;
+    //     CUDA_ASSERTRT(cudaSetDevice(cur_dev_rank));
+    //     return gdr_support;
+    // }
+
+    gdr_mh_t gdrmh;
+    int gdrret;
+    gdrret = gdr_pin_buffer(client->cuda_info.gdrcopy_handle, d_A, buf_size, 0, 0, &gdrmh);
+    if(gdrret != 0) {
+        // fprintf(stderr, "ERROR: (%s): gdr_pin_buffer() failed, Err Code: (%d)\n"
+        //                 "GPU %d might not support GPUDirect RDMA\n", __func__, gdrret, data_dev_rank);
+        gdr_support = 0;
+        CUDA_ASSERTRT(cudaSetDevice(cur_dev_rank));
+        return gdr_support;
+    }
+
+    gdrret = gdr_unpin_buffer(client->cuda_info.gdrcopy_handle, gdrmh);
+    if(gdrret != 0) {
+        // fprintf(stderr, "ERROR: (%s): gdr_unpin_buffer() failed, Err Code: (%d)\n", __func__, gdrret);
+        gdr_support = 0;
+        CUDA_ASSERTRT(cudaSetDevice(cur_dev_rank));
+        return gdr_support;
+    }
+
+    // gdrret = gdr_close(gdr);
+    // if(gdrret != 0) {
+    //     // fprintf(stderr, "ERROR: (%s): gdr_close() failed, Err Code: (%d)\n", __func__, gdrret);
+    //     gdr_support = 0;
+    //     CUDA_ASSERTRT(cudaSetDevice(cur_dev_rank));
+    //     return gdr_support;
+    // }
+
+    CUDA_ASSERTDRV(cuMemFree(ptr));
+
+    gdr_support = 1;
+    CUDA_ASSERTRT(cudaSetDevice(cur_dev_rank));
+
+    return gdr_support;
+}
+
+static int check_gdrcopy_support_dev_all(dspaces_client_t client)
+{
+    for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
+        int gdr_support = check_gdrcopy_support_dev(client, dev_rank);
+        if(gdr_support != dspaces_ERR_CUDA) {
+            // add info to cuda device table
+            if(gdr_support) {
+                client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_GDRCOPY;
+            }
+        } else{
+            return dspaces_ERR_CUDA;
+        }
+    }
+
+    return dspaces_SUCCESS;
+}
+
+static int gdrcopy_init(dspaces_client_t client)
+{
+    client->cuda_info.gdrcopy_handle = gdr_open();
+    if(!client->cuda_info.gdrcopy_handle) {
+        fprintf(stderr, "Error: Rank %i: gdr_open() failed!\n", client->rank);
+        return dspaces_ERR_GDRCOPY;
+    }
+    return dspaces_SUCCESS;
+}
+
+static inline void gdrcopy_fini(dspaces_client_t client)
+{
+    gdr_close(client->cuda_info.gdrcopy_handle);
+}
+#endif
+
+static int dspaces_init_gpu(dspaces_client_t client)
+{
+    int ret = dspaces_SUCCESS;
+
+    const char *envgdr = getenv("DSPACES_GDR");
+    const char *envgdrcopy = getenv("DSPACES_GDRCOPY");
+
+    CUDA_ASSERTRT(cudaGetDeviceCount(&client->cuda_info.dev_num));
+    client->cuda_info.dev_list = (struct dspaces_cuda_dev_info*) malloc(client->cuda_info.dev_num*sizeof(struct dspaces_cuda_dev_info));
+    // default mode is pipeline
+    for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
+            client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_PIPELINE;
+    }
+
+    if(envgdr) {
+        for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
+            client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_GDR;
+        }
+        client->f_gdr = 1;
+    }
+#ifdef HAVE_GDRCOPY
+    if(envgdrcopy) {
+        ret = gdrcopy_init(client);
+        if(ret =! dspaces_SUCCESS) {
+            const char* hint = client->f_gdr ? "GDR" : "Pipeline";
+            fprintf(stdout, "Warning: Rank %i: switch back to %s mode\n", client->rank, hint);
+        } else {
+            ret = check_gdrcopy_support_dev_all(client);
+            if(ret != dspaces_SUCCESS) {
+                gdrcopy_fini(client);
+                return dspaces_ERR_CUDA;
+            }
+        }
+    }
+#endif
 
     return dspaces_SUCCESS;
 }
@@ -586,6 +794,11 @@ int dspaces_init(int rank, dspaces_client_t *c)
         return (ret);
     }
 
+    ret = dspaces_init_gpu(&client);
+    if(ret != dspaces_SUCCESS) {
+        return (ret);
+    }
+
     ret = read_conf(client, &listen_addr_str);
     if(ret != 0) {
         return (ret);
@@ -612,6 +825,11 @@ int dspaces_init_mpi(MPI_Comm comm, dspaces_client_t *c)
     MPI_Comm_rank(comm, &rank);
 
     ret = dspaces_init_internal(rank, &client);
+    if(ret != dspaces_SUCCESS) {
+        return (ret);
+    }
+
+    ret = dspaces_init_gpu(&client);
     if(ret != dspaces_SUCCESS) {
         return (ret);
     }
@@ -679,6 +897,11 @@ int dspaces_fini(dspaces_client_t client)
     free(client->server_address);
     ls_free(client->dcg->ls);
     free(client->dcg);
+
+#ifdef HAVE_GDRCOPY
+    gdrcopy_fini(client);
+#endif
+    free(client->cuda_info->dev_list);
 
     margo_finalize(client->mid);
 
@@ -863,16 +1086,12 @@ static int cuda_put_pipeline(dspaces_client_t client, const char *var_name, unsi
 
     size_t rdma_size = (elem_size)*bbox_volume(&odsc.bb);
 
-    cudaError_t curet;
     cudaStream_t stream;
-    curet = cudaStreamCreate(&stream);
-    if(curet != cudaSuccess) {
-        fprintf(stderr, "ERROR: (%s): cudaStreamCreate() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
-        return dspaces_ERR_CUDA;
-    }
-
+    CUDA_ASSERTRT(cudaStreamCreate(&stream));
+    
     void* buffer = (void*) malloc(rdma_size);
 
+    cudaError_t curet;
     curet = cudaMemcpyAsync(buffer, data, rdma_size, cudaMemcpyDeviceToHost, stream);
     if(curet != cudaSuccess) {
         fprintf(stderr, "ERROR: (%s): cudaMemcpyAsync() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
@@ -941,11 +1160,7 @@ static int cuda_put_pipeline(dspaces_client_t client, const char *var_name, unsi
     margo_destroy(handle);
     margo_addr_free(client->mid, server_addr);
 
-    curet = cudaStreamDestroy(stream);
-    if(curet != cudaSuccess) {
-        fprintf(stderr, "ERROR: (%s): cudaStreamDestroy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
-        return dspaces_ERR_CUDA;
-    }
+    CUDA_ASSERTRT(cudaStreamDestroy(stream));
 
     return ret;
 }
@@ -1032,16 +1247,196 @@ static int cuda_put_gdr(dspaces_client_t client, const char *var_name, unsigned 
     return ret;
 }
 
+#ifdef HAVE_GDRCOPY
+static int cuda_put_gdrcopy(dspaces_client_t client, const char *var_name, unsigned int ver,
+                int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
+                const void *data)
+{
+    fprintf(stdout, "cuda_put_gdr()\n");
+    hg_addr_t server_addr;
+    hg_handle_t handle;
+    hg_return_t hret;
+    bulk_gdim_t in;
+    bulk_out_t out;
+    int ret = dspaces_SUCCESS;
+    int gdrret;
+    gdr_mh_t gdr_mh;
+    gdr_info_t gdr_info;
+
+    obj_descriptor odsc = {.version = ver,
+                           .owner = {0},
+                           .st = st,
+                           .flags = 0,
+                           .size = elem_size,
+                           .bb = {
+                               .num_dims = ndim,
+                           }};
+
+    memset(odsc.bb.lb.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+    memset(odsc.bb.ub.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+
+    memcpy(odsc.bb.lb.c, lb, sizeof(uint64_t) * ndim);
+    memcpy(odsc.bb.ub.c, ub, sizeof(uint64_t) * ndim);
+
+    strncpy(odsc.name, var_name, sizeof(odsc.name) - 1);
+    odsc.name[sizeof(odsc.name) - 1] = '\0';
+
+    struct global_dimension odsc_gdim;
+    set_global_dimension(&(client->dcg->gdim_list), var_name,
+                         &(client->dcg->default_gdim), &odsc_gdim);
+
+    in.odsc.size = sizeof(odsc);
+    in.odsc.raw_odsc = (char *)(&odsc);
+    in.odsc.gdim_size = sizeof(struct global_dimension);
+    in.odsc.raw_gdim = (char *)(&odsc_gdim);
+    size_t rdma_size = (elem_size)*bbox_volume(&odsc.bb);
+
+    void *buffer = (void*) malloc(rdma_size);
+
+    /* gdr_copy starts */
+
+    gdrret = gdr_pin_buffer(client->cuda_info.gdrcopy_handle, data, rdma_size, 0, 0, &gdr_mh);
+    if(gdrret != 0) {
+        fprintf(stderr, "Rank %i: %s, line %i (%s): gdr_pin_buffer() failed!, Err Code = %i",
+                         client->rank, __FILE__, __LINE__, __func__, gdrret);
+        free(buffer);                 
+        return dspaces_ERR_GDRCOPY;
+    }
+
+    void *map_d_ptr  = NULL;
+    gdrret = gdr_map(client->cuda_info.gdrcopy_handle, gdr_mh, &map_d_ptr, rdma_size);
+    if(gdrret != 0) {
+        fprintf(stderr, "Rank %i: %s, line %i (%s): gdr_map() failed!, Err Code = %i",
+                         client->rank, __FILE__, __LINE__, __func__, gdrret);
+        free(buffer);
+        return dspaces_ERR_GDRCOPY;
+    }
+
+    gdrret = gdr_get_info(client->cuda_info.gdrcopy_handle, gdr_mh, &gdr_info);
+    if(gdrret != 0) {
+        fprintf(stderr, "Rank %i: %s, line %i (%s): gdr_get_info() failed!, Err Code = %i",
+                         client->rank, __FILE__, __LINE__, __func__, gdrret);
+        free(buffer);
+        return dspaces_ERR_GDRCOPY;
+    }
+
+    // remember that mappings start on a 64KB boundary, so let's
+    // calculate the offset from the head of the mapping to the
+    // beginning of the buffer
+    int gdr_offset = gdr_info.va - data;
+    void *gdr_buf_ptr = (void *)((char *)map_d_ptr + gdr_offset);
+
+    gdrret = gdr_copy_from_mapping(gdr_mh, buffer, gdr_buf_ptr, rdma_size);
+    if(gdrret != 0) {
+        fprintf(stderr, "Rank %i: %s, line %i (%s): gdr_copy_from_mapping() failed!, Err Code = %i",
+                         client->rank, __FILE__, __LINE__, __func__, gdrret);
+        free(buffer);
+        return dspaces_ERR_GDRCOPY;
+    }
+
+    gdrret = gdr_unmap(client->cuda_info.gdrcopy_handle, gdr_mh, map_d_ptr, rdma_size);
+    if(gdrret != 0) {
+        fprintf(stderr, "Rank %i: %s, line %i (%s): gdr_unmap() failed!, Err Code = %i",
+                         client->rank, __FILE__, __LINE__, __func__, gdrret);
+        free(buffer);
+        return dspaces_ERR_GDRCOPY;
+    }
+
+    gdrret = gdr_unpin_buffer(client->cuda_info.gdrcopy_handle, gdr_mh);
+    if(gdrret != 0) {
+        fprintf(stderr, "Rank %i: %s, line %i (%s): gdr_unpin_buffer() failed!, Err Code = %i",
+                         client->rank, __FILE__, __LINE__, __func__, gdrret);
+        free(buffer);
+        return dspaces_ERR_GDRCOPY;
+    }
+
+    /* gdr_copy ends*/
+
+    DEBUG_OUT("sending object %s \n", obj_desc_sprint(&odsc));
+
+    hret = margo_bulk_create(client->mid, 1, (void **)&data, &rdma_size,
+                             HG_BULK_READ_ONLY, &in.handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
+        return dspaces_ERR_MERCURY;
+    }
+
+    get_server_address(client, &server_addr);
+
+    hret = margo_create(client->mid, server_addr, client->put_id, &handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    hret = margo_forward(handle, &in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_forward() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        margo_destroy(handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    hret = margo_get_output(handle, &out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        margo_destroy(handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    free(buffer);
+
+    ret = out.ret;
+    margo_free_output(handle, &out);
+    margo_bulk_free(in.handle);
+    margo_destroy(handle);
+    margo_addr_free(client->mid, server_addr);
+    return ret;
+
+}
+
+static inline int is_aligned(const void *ptr, size_t page_size)
+{
+    return ((uintptr_t)ptr % page_size == 0)
+}
+#endif
+
 int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int ver,
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
                 const void *data)
 {
     int ret = dspaces_SUCCESS;
-    if(client->f_gdr) {
-        ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
-    } else {
+    int data_dev_rank;
+    cudaPointerAttributes ptr_attr;
+    CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, data));
+    data_dev_rank = ptr_attr.device;
+    switch (client->cuda_info->dev_list[data_dev_rank].mode)
+    {
+    case dspaces_CUDA_PIPELINE:
         ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        break;
+    case dspaces_CUDA_GDR:
+        ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        break;
+#ifdef HAVE_GDRCOPY
+    case dspaces_CUDA_GDRCOPY:
+        // check if data pointer is aligned to GPU page defined in gdrcopy
+        if(is_aligned(data, GPU_PAGE_SIZE)) {
+            ret = cuda_put_gdrcopy(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        } else if (client->f_gdr) {
+            ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        } else {
+            ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        }
+        break;
+#endif
+    default:
+        ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        break;
     }
+
     return ret;
 }
 
