@@ -28,6 +28,11 @@ set (dspaces-pkg "share/cmake/dspaces")
 set (dspaces-vers "${dspaces_VERSION_MAJOR}.${dspaces_VERSION_MINOR}")
 
 add_library(dspaces ${dspaces-src})
+
+# We need both cuda driver and cuda runtime headers and libs
+# ${CUDA_LIBRARIES} returned by find_package(CUDA) only has the cuda runtime libs
+# so we have to manually add -lcuda
+
 if(HAVE_DRC)
     target_link_libraries (dspaces margo m pthread ${DRC_LIBRARIES})
     target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${DRC_INCLUDE_DIRS})
@@ -37,7 +42,7 @@ else()
             target_link_libraries (dspaces margo m pthread CUDA::cudart CUDA::cuda_driver ${GDRCOPY_LIBRARIES})
             target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${CUDAToolkit_INCLUDE_DIRS} ${GDRCOPY_INCLUDE_DIRS})
         else()
-            target_link_libraries (dspaces margo m pthread ${CUDA_LIBRARIES} ${GDRCOPY_LIBRARIES})
+            target_link_libraries (dspaces margo m pthread cuda ${CUDA_LIBRARIES} ${GDRCOPY_LIBRARIES})
             target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${CUDA_INCLUDE_DIRS} ${GDRCOPY_INCLUDE_DIRS})
         endif()
     else()
@@ -45,7 +50,7 @@ else()
             target_link_libraries (dspaces margo m pthread CUDA::cudart CUDA::cuda_driver)
             target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${CUDAToolkit_INCLUDE_DIRS})
         else()
-            target_link_libraries (dspaces margo m pthread ${CUDA_LIBRARIES})
+            target_link_libraries (dspaces margo m pthread cuda ${CUDA_LIBRARIES})
             target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${CUDA_INCLUDE_DIRS})
         endif()
     endif()
