@@ -794,7 +794,7 @@ int dspaces_init(int rank, dspaces_client_t *c)
         return (ret);
     }
 
-    ret = dspaces_init_gpu(&client);
+    ret = dspaces_init_gpu(client);
     if(ret != dspaces_SUCCESS) {
         return (ret);
     }
@@ -829,7 +829,7 @@ int dspaces_init_mpi(MPI_Comm comm, dspaces_client_t *c)
         return (ret);
     }
 
-    ret = dspaces_init_gpu(&client);
+    ret = dspaces_init_gpu(client);
     if(ret != dspaces_SUCCESS) {
         return (ret);
     }
@@ -1262,7 +1262,7 @@ static int cuda_put_gdrcopy(dspaces_client_t client, const char *var_name, unsig
     int gdrret;
     gdr_mh_t gdr_mh;
     gdr_info_t gdr_info;
-    CUdeviceptr d_ptr = data;
+    CUdeviceptr d_ptr = (CUdeviceptr) data;
 
     obj_descriptor odsc = {.version = ver,
                            .owner = {0},
