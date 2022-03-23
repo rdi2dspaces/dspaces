@@ -63,7 +63,7 @@
                         client->rank, __FILE__, __LINE__, __func__, #stmt,      \
                         cudaGetErrorString(err));                               \
             }                                                                   \
-            CUDA_ASSERT(CUDA_SUCCESS == result);                                \
+            CUDA_ASSERT(CUDA_SUCCESS == err);                                \
         } while (0)
 
 #define CUDA_ASSERTDRV(stmt)				                                    \
@@ -901,7 +901,7 @@ int dspaces_fini(dspaces_client_t client)
 #ifdef HAVE_GDRCOPY
     gdrcopy_fini(client);
 #endif
-    free(client->cuda_info->dev_list);
+    free(client->cuda_info.dev_list);
 
     margo_finalize(client->mid);
 
@@ -1262,6 +1262,7 @@ static int cuda_put_gdrcopy(dspaces_client_t client, const char *var_name, unsig
     int gdrret;
     gdr_mh_t gdr_mh;
     gdr_info_t gdr_info;
+    CUdeviceptr d_ptr = data;
 
     obj_descriptor odsc = {.version = ver,
                            .owner = {0},
@@ -1295,7 +1296,7 @@ static int cuda_put_gdrcopy(dspaces_client_t client, const char *var_name, unsig
 
     /* gdr_copy starts */
 
-    gdrret = gdr_pin_buffer(client->cuda_info.gdrcopy_handle, data, rdma_size, 0, 0, &gdr_mh);
+    gdrret = gdr_pin_buffer(client->cuda_info.gdrcopy_handle, d_ptr, rdma_size, 0, 0, &gdr_mh);
     if(gdrret != 0) {
         fprintf(stderr, "Rank %i: %s, line %i (%s): gdr_pin_buffer() failed!, Err Code = %i",
                          client->rank, __FILE__, __LINE__, __func__, gdrret);
@@ -1323,7 +1324,7 @@ static int cuda_put_gdrcopy(dspaces_client_t client, const char *var_name, unsig
     // remember that mappings start on a 64KB boundary, so let's
     // calculate the offset from the head of the mapping to the
     // beginning of the buffer
-    int gdr_offset = gdr_info.va - data;
+    int gdr_offset = gdr_info.va - d_ptr;
     void *gdr_buf_ptr = (void *)((char *)map_d_ptr + gdr_offset);
 
     gdrret = gdr_copy_from_mapping(gdr_mh, buffer, gdr_buf_ptr, rdma_size);
@@ -1354,7 +1355,7 @@ static int cuda_put_gdrcopy(dspaces_client_t client, const char *var_name, unsig
 
     DEBUG_OUT("sending object %s \n", obj_desc_sprint(&odsc));
 
-    hret = margo_bulk_create(client->mid, 1, (void **)&data, &rdma_size,
+    hret = margo_bulk_create(client->mid, 1, (void **)&buffer, &rdma_size,
                              HG_BULK_READ_ONLY, &in.handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
@@ -1399,7 +1400,7 @@ static int cuda_put_gdrcopy(dspaces_client_t client, const char *var_name, unsig
 
 static inline int is_aligned(const void *ptr, size_t page_size)
 {
-    return ((uintptr_t)ptr % page_size == 0)
+    return ((uintptr_t)ptr % page_size == 0);
 }
 #endif
 
@@ -1409,10 +1410,10 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
 {
     int ret = dspaces_SUCCESS;
     int data_dev_rank;
-    cudaPointerAttributes ptr_attr;
+    struct cudaPointerAttributes ptr_attr;
     CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, data));
     data_dev_rank = ptr_attr.device;
-    switch (client->cuda_info->dev_list[data_dev_rank].mode)
+    switch (client->cuda_info.dev_list[data_dev_rank].mode)
     {
     case dspaces_CUDA_PIPELINE:
         ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
