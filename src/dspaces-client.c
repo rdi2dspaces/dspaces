@@ -154,6 +154,7 @@ struct dspaces_client {
     int f_debug;
     int f_final;
     int f_gdr;
+    int f_gdrcopy;
     struct dspaces_cuda_info cuda_info;
     int listener_init;
     struct dspaces_put_req *put_reqs;
@@ -617,6 +618,7 @@ static int dspaces_init_gpu(dspaces_client_t client)
                 gdrcopy_fini(client);
                 return dspaces_ERR_CUDA;
             }
+            client->f_gdrcopy = 1;
         }
     }
 #endif
@@ -899,7 +901,9 @@ int dspaces_fini(dspaces_client_t client)
     free(client->dcg);
 
 #ifdef HAVE_GDRCOPY
-    gdrcopy_fini(client);
+    if(client->f_gdrcopy) {
+        gdrcopy_fini(client);
+    }
 #endif
     free(client->cuda_info.dev_list);
 
