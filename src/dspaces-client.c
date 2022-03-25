@@ -1271,7 +1271,7 @@ static int cuda_put_gdrcopy(dspaces_client_t client, const char *var_name, unsig
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
                 const void *data)
 {
-    fprintf(stdout, "cuda_put_gdr()\n");
+    fprintf(stdout, "cuda_put_gdrcopy()\n");
     hg_addr_t server_addr;
     hg_handle_t handle;
     hg_return_t hret;
