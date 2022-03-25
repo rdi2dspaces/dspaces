@@ -609,7 +609,7 @@ static int dspaces_init_gpu(dspaces_client_t client)
 #ifdef HAVE_GDRCOPY
     if(envgdrcopy) {
         ret = gdrcopy_init(client);
-        if(ret =! dspaces_SUCCESS) {
+        if(ret != dspaces_SUCCESS) {
             const char* hint = client->f_gdr ? "GDR" : "Pipeline";
             fprintf(stdout, "Warning: Rank %i: switch back to %s mode\n", client->rank, hint);
         } else {
