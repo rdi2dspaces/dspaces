@@ -107,6 +107,8 @@ enum dspaces_cuda_dev_mode {dspaces_CUDA_PIPELINE, dspaces_CUDA_GDR, dspaces_CUD
 
 struct dspaces_cuda_dev_info {
     enum dspaces_cuda_dev_mode mode;
+    CUdevice dev;
+    CUcontext dev_ctx;
 };
 
 struct dspaces_cuda_info {
@@ -572,6 +574,10 @@ static int check_gdrcopy_support_dev_all(dspaces_client_t client)
 
 static int gdrcopy_init(dspaces_client_t client)
 {
+    for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
+        CUDA_ASSERTDRV(cuDevicePrimaryCtxRetain(&(client->cuda_info.dev_list[dev_rank].dev_ctx),
+                                                client->cuda_info.dev_list[dev_rank].dev));
+    }
     client->cuda_info.gdrcopy_handle = gdr_open();
     if(!client->cuda_info.gdrcopy_handle) {
         fprintf(stderr, "Error: Rank %i: gdr_open() failed!\n", client->rank);
@@ -595,6 +601,12 @@ static int dspaces_init_gpu(dspaces_client_t client)
 
     CUDA_ASSERTRT(cudaGetDeviceCount(&client->cuda_info.dev_num));
     client->cuda_info.dev_list = (struct dspaces_cuda_dev_info*) malloc(client->cuda_info.dev_num*sizeof(struct dspaces_cuda_dev_info));
+
+    // Get device info
+    for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
+            CUDA_ASSERTDRV(cuDeviceGet(&(client->cuda_info.dev_list[dev_rank].dev), dev_rank));
+    }
+
     // default mode is pipeline
     for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
             client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_PIPELINE;
@@ -903,6 +915,9 @@ int dspaces_fini(dspaces_client_t client)
 #ifdef HAVE_GDRCOPY
     if(client->f_gdrcopy) {
         gdrcopy_fini(client);
+        for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
+            CUDA_ASSERTDRV(cuDevicePrimaryCtxRelease(client->cuda_info.dev_list[dev_rank].dev));
+        }
     }
 #endif
     free(client->cuda_info.dev_list);
