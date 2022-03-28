@@ -112,6 +112,7 @@ struct dspaces_cuda_dev_info {
 };
 
 struct dspaces_cuda_info {
+    int cuda_mode;
     int dev_num;
     struct dspaces_cuda_dev_info *dev_list;
 #ifdef HAVE_GDRCOPY
@@ -596,44 +597,57 @@ static int dspaces_init_gpu(dspaces_client_t client)
 {
     int ret = dspaces_SUCCESS;
 
-    const char *envgdr = getenv("DSPACES_GDR");
-    const char *envgdrcopy = getenv("DSPACES_GDRCOPY");
-
-    CUDA_ASSERTRT(cudaGetDeviceCount(&client->cuda_info.dev_num));
-    client->cuda_info.dev_list = (struct dspaces_cuda_dev_info*) malloc(client->cuda_info.dev_num*sizeof(struct dspaces_cuda_dev_info));
-
-    // Get device info
-    for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
-            CUDA_ASSERTDRV(cuDeviceGet(&(client->cuda_info.dev_list[dev_rank].dev), dev_rank));
-    }
-
-    // default mode is pipeline
-    for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
-            client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_PIPELINE;
-    }
-
-    if(envgdr) {
-        for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
-            client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_GDR;
-        }
-        client->f_gdr = 1;
-    }
-#ifdef HAVE_GDRCOPY
-    if(envgdrcopy) {
-        ret = gdrcopy_init(client);
-        if(ret != dspaces_SUCCESS) {
-            const char* hint = client->f_gdr ? "GDR" : "Pipeline";
-            fprintf(stdout, "Warning: Rank %i: switch back to %s mode\n", client->rank, hint);
+    const char *envcudamode = getenv("DSPACES_CUDA_MODE");
+    if(envcudamode) {
+        int cudamode = atoi(envcudamode);
+        // mode check 0-3
+        if(cudamode >=0 && cudamode < 4) {
+            client->cuda_info.cuda_mode = cudamode;
         } else {
-            ret = check_gdrcopy_support_dev_all(client);
-            if(ret != dspaces_SUCCESS) {
-                gdrcopy_fini(client);
-                return dspaces_ERR_CUDA;
-            }
-            client->f_gdrcopy = 1;
+            client->cuda_info.cuda_mode = 0;
         }
+    } else {
+        client->cuda_info.cuda_mode = 0;
     }
-#endif
+
+//     const char *envgdr = getenv("DSPACES_GDR");
+//     const char *envgdrcopy = getenv("DSPACES_GDRCOPY");
+
+//     CUDA_ASSERTRT(cudaGetDeviceCount(&client->cuda_info.dev_num));
+//     client->cuda_info.dev_list = (struct dspaces_cuda_dev_info*) malloc(client->cuda_info.dev_num*sizeof(struct dspaces_cuda_dev_info));
+
+//     // Get device info
+//     for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
+//             CUDA_ASSERTDRV(cuDeviceGet(&(client->cuda_info.dev_list[dev_rank].dev), dev_rank));
+//     }
+
+//     // default mode is pipeline
+//     for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
+//             client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_PIPELINE;
+//     }
+
+//     if(envgdr) {
+//         for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
+//             client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_GDR;
+//         }
+//         client->f_gdr = 1;
+//     }
+// #ifdef HAVE_GDRCOPY
+//     if(envgdrcopy) {
+//         ret = gdrcopy_init(client);
+//         if(ret != dspaces_SUCCESS) {
+//             const char* hint = client->f_gdr ? "GDR" : "Pipeline";
+//             fprintf(stdout, "Warning: Rank %i: switch back to %s mode\n", client->rank, hint);
+//         } else {
+//             ret = check_gdrcopy_support_dev_all(client);
+//             if(ret != dspaces_SUCCESS) {
+//                 gdrcopy_fini(client);
+//                 return dspaces_ERR_CUDA;
+//             }
+//             client->f_gdrcopy = 1;
+//         }
+//     }
+// #endif
 
     return dspaces_SUCCESS;
 }
@@ -1281,7 +1295,7 @@ static int cuda_put_gdr(dspaces_client_t client, const char *var_name, unsigned 
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
                 const void *data)
 {
-    fprintf(stdout, "cuda_put_gdr()\n");
+    // fprintf(stdout, "cuda_put_gdr()\n");
     hg_addr_t server_addr;
     hg_handle_t handle;
     hg_return_t hret;
@@ -1364,7 +1378,7 @@ static int cuda_put_gdrcopy(dspaces_client_t client, const char *var_name, unsig
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
                 const void *data)
 {
-    fprintf(stdout, "cuda_put_gdrcopy()\n");
+    // fprintf(stdout, "cuda_put_gdrcopy()\n");
     hg_addr_t server_addr;
     hg_handle_t handle;
     hg_return_t hret;
@@ -1525,16 +1539,18 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
     struct cudaPointerAttributes ptr_attr;
     CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, data));
     data_dev_rank = ptr_attr.device;
-    switch (client->cuda_info.dev_list[data_dev_rank].mode)
+    switch (client->cuda_info.cuda_mode)
     {
-    case dspaces_CUDA_PIPELINE:
+    case 0:
+        ret = cuda_put_baseline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        break;
+    case 1:
         ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
         break;
-    case dspaces_CUDA_GDR:
+    case 2:
         ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
-        break;
 #ifdef HAVE_GDRCOPY
-    case dspaces_CUDA_GDRCOPY:
+    case 3:
         // check if data pointer is aligned to GPU page defined in gdrcopy
         if(is_aligned(data, GPU_PAGE_SIZE)) {
             ret = cuda_put_gdrcopy(client, var_name, ver, elem_size, ndim, lb, ub, data);
@@ -1544,11 +1560,35 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
             ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
         }
         break;
-#endif
+#endif    
     default:
-        ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        ret = cuda_put_baseline(client, var_name, ver, elem_size, ndim, lb, ub, data);
         break;
     }
+//     switch (client->cuda_info.dev_list[data_dev_rank].mode)
+//     {
+//     case dspaces_CUDA_PIPELINE:
+//         ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+//         break;
+//     case dspaces_CUDA_GDR:
+//         ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
+//         break;
+// #ifdef HAVE_GDRCOPY
+//     case dspaces_CUDA_GDRCOPY:
+//         // check if data pointer is aligned to GPU page defined in gdrcopy
+//         if(is_aligned(data, GPU_PAGE_SIZE)) {
+//             ret = cuda_put_gdrcopy(client, var_name, ver, elem_size, ndim, lb, ub, data);
+//         } else if (client->f_gdr) {
+//             ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
+//         } else {
+//             ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+//         }
+//         break;
+// #endif
+//     default:
+//         ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+//         break;
+//     }
 
     return ret;
 }
