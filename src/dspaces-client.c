@@ -635,26 +635,26 @@ static int dspaces_init_gpu(dspaces_client_t client)
     }
 #endif
 
-    const char hint[16];
+    char hint[16];
     switch (client->cuda_info.cuda_mode)
     {
     case 0:
-        sprintf(hint, "Hybrid")
+        sprintf(hint, "Hybrid");
         break;
     case 1:
-        sprintf(hint, "Baseline")
+        sprintf(hint, "Baseline");
         break;    
     case 2:
-        sprintf(hint, "Pipeline")
+        sprintf(hint, "Pipeline");
         break;
     case 3:
-        sprintf(hint, "GDR")
+        sprintf(hint, "GDR");
         break;
     case 4:
-        sprintf(hint, "GDRCopy")
+        sprintf(hint, "GDRCopy");
         break;
     default:
-        sprintf(hint, "Error")
+        sprintf(hint, "Error");
         break;
     }
 
@@ -1253,6 +1253,8 @@ static int cuda_put_pipeline(dspaces_client_t client, const char *var_name, unsi
                              HG_BULK_READ_ONLY, &in.handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
+        cudaStreamDestroy(stream);
+        free(buffer);
         return dspaces_ERR_MERCURY;
     }
 
@@ -1262,6 +1264,8 @@ static int cuda_put_pipeline(dspaces_client_t client, const char *var_name, unsi
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
         margo_bulk_free(in.handle);
+        cudaStreamDestroy(stream);
+        free(buffer);
         return dspaces_ERR_MERCURY;
     }
 
@@ -1278,6 +1282,8 @@ static int cuda_put_pipeline(dspaces_client_t client, const char *var_name, unsi
         fprintf(stderr, "ERROR: (%s): margo_forward() failed\n", __func__);
         margo_bulk_free(in.handle);
         margo_destroy(handle);
+        cudaStreamDestroy(stream);
+        free(buffer);
         return dspaces_ERR_MERCURY;
     }
 
@@ -1286,10 +1292,10 @@ static int cuda_put_pipeline(dspaces_client_t client, const char *var_name, unsi
         fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
         margo_bulk_free(in.handle);
         margo_destroy(handle);
+        cudaStreamDestroy(stream);
+        free(buffer);
         return dspaces_ERR_MERCURY;
     }
-
-    free(buffer);
 
     ret = out.ret;
     margo_free_output(handle, &out);
@@ -1298,6 +1304,7 @@ static int cuda_put_pipeline(dspaces_client_t client, const char *var_name, unsi
     margo_addr_free(client->mid, server_addr);
 
     CUDA_ASSERTRT(cudaStreamDestroy(stream));
+    free(buffer);
 
     return ret;
 }
@@ -1578,11 +1585,11 @@ static int cuda_put_hybrid(dspaces_client_t client, const char *var_name, unsign
     if(rdma_size >= threshold) {
         CUDA_ASSERTRT(cudaStreamCreate(&stream));
         h_buffer = (void*) malloc(rdma_size);
-        curet = cudaMemcpyAsync(buffer, data, rdma_size, cudaMemcpyDeviceToHost, stream);
+        curet = cudaMemcpyAsync(h_buffer, data, rdma_size, cudaMemcpyDeviceToHost, stream);
         if(curet != cudaSuccess) {
             fprintf(stderr, "ERROR: (%s): cudaMemcpyAsync() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
             cudaStreamDestroy(stream);
-            free(buffer);
+            free(h_buffer);
             return dspaces_ERR_CUDA;
         }
     }
@@ -1609,6 +1616,8 @@ static int cuda_put_hybrid(dspaces_client_t client, const char *var_name, unsign
 
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
+        cudaStreamDestroy(stream);
+        free(h_buffer);
         return dspaces_ERR_MERCURY;
     }
 
@@ -1618,6 +1627,8 @@ static int cuda_put_hybrid(dspaces_client_t client, const char *var_name, unsign
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
         margo_bulk_free(in.handle);
+        cudaStreamDestroy(stream);
+        free(h_buffer);
         return dspaces_ERR_MERCURY;
     }
 
@@ -1626,7 +1637,7 @@ static int cuda_put_hybrid(dspaces_client_t client, const char *var_name, unsign
         if(curet != cudaSuccess) {
             fprintf(stderr, "ERROR: (%s): cudaStreamSynchronize() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
             cudaStreamDestroy(stream);
-            free(buffer);
+            free(h_buffer);
             return dspaces_ERR_CUDA;
         }
     }
@@ -1636,6 +1647,8 @@ static int cuda_put_hybrid(dspaces_client_t client, const char *var_name, unsign
         fprintf(stderr, "ERROR: (%s): margo_forward() failed\n", __func__);
         margo_bulk_free(in.handle);
         margo_destroy(handle);
+        cudaStreamDestroy(stream);
+        free(h_buffer);
         return dspaces_ERR_MERCURY;
     }
 
@@ -1644,6 +1657,8 @@ static int cuda_put_hybrid(dspaces_client_t client, const char *var_name, unsign
         fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
         margo_bulk_free(in.handle);
         margo_destroy(handle);
+        cudaStreamDestroy(stream);
+        free(h_buffer);
         return dspaces_ERR_MERCURY;
     }
 
@@ -1654,8 +1669,8 @@ static int cuda_put_hybrid(dspaces_client_t client, const char *var_name, unsign
     margo_addr_free(client->mid, server_addr);
 
     if(rdma_size >= threshold) {
-        free(buffer);
         CUDA_ASSERTRT(cudaStreamDestroy(stream));
+        free(h_buffer);
     }
 
     return ret;
