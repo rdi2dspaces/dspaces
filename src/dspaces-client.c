@@ -156,8 +156,6 @@ struct dspaces_client {
     int local_put_count; // used during finalize
     int f_debug;
     int f_final;
-    int f_gdr;
-    int f_gdrcopy;
     struct dspaces_cuda_info cuda_info;
     int listener_init;
     struct dspaces_put_req *put_reqs;
@@ -598,6 +596,8 @@ static int dspaces_init_gpu(dspaces_client_t client)
     int ret = dspaces_SUCCESS;
 
     const char *envcudamode = getenv("DSPACES_CUDA_MODE");
+
+    // Default Mode: 0 - Hybrid, Others: 1 - Baseline, 2 - Pipeline, 3 - GDR, 4 - GDRCopy
     if(envcudamode) {
         int cudamode = atoi(envcudamode);
         // mode check 0-3
@@ -613,65 +613,52 @@ static int dspaces_init_gpu(dspaces_client_t client)
     CUDA_ASSERTRT(cudaGetDeviceCount(&client->cuda_info.dev_num));
     client->cuda_info.dev_list = (struct dspaces_cuda_dev_info*) malloc(client->cuda_info.dev_num*sizeof(struct dspaces_cuda_dev_info));
 
+    // Get Device Info
     for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
         CUDA_ASSERTDRV(cuDeviceGet(&(client->cuda_info.dev_list[dev_rank].dev), dev_rank));
     }
 
 #ifdef HAVE_GDRCOPY
-    if(client->cuda_info.cuda_mode == 3) {
+    if(client->cuda_info.cuda_mode == 4) {
         ret = gdrcopy_init(client);
-        if(ret != dspaces_SUCCESS) {
-            const char* hint = client->f_gdr ? "GDR" : "Pipeline";
-            fprintf(stdout, "Warning: Rank %i: switch back to %s mode\n", client->rank, hint);
-        } else {
+        if(ret == dspaces_SUCCESS) {
             ret = check_gdrcopy_support_dev_all(client);
             if(ret != dspaces_SUCCESS) {
                 gdrcopy_fini(client);
+                fprintf(stderr, "Error: Rank %i: check_gdrcopy_support_dev_all() failed!\n", client->rank);
                 return dspaces_ERR_CUDA;
             }
+        } else {
+            fprintf(stderr, "Error: Rank %i: gdrcopy_init() failed!\n", client->rank);
+            return dspaces_ERR_GDRCOPY;
         }
     }
 #endif
 
+    const char hint[16];
+    switch (client->cuda_info.cuda_mode)
+    {
+    case 0:
+        sprintf(hint, "Hybrid")
+        break;
+    case 1:
+        sprintf(hint, "Baseline")
+        break;    
+    case 2:
+        sprintf(hint, "Pipeline")
+        break;
+    case 3:
+        sprintf(hint, "GDR")
+        break;
+    case 4:
+        sprintf(hint, "GDRCopy")
+        break;
+    default:
+        sprintf(hint, "Error")
+        break;
+    }
 
-//     const char *envgdr = getenv("DSPACES_GDR");
-//     const char *envgdrcopy = getenv("DSPACES_GDRCOPY");
-
-//     CUDA_ASSERTRT(cudaGetDeviceCount(&client->cuda_info.dev_num));
-//     client->cuda_info.dev_list = (struct dspaces_cuda_dev_info*) malloc(client->cuda_info.dev_num*sizeof(struct dspaces_cuda_dev_info));
-
-//     // Get device info
-//     for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
-//             CUDA_ASSERTDRV(cuDeviceGet(&(client->cuda_info.dev_list[dev_rank].dev), dev_rank));
-//     }
-
-//     // default mode is pipeline
-//     for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
-//             client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_PIPELINE;
-//     }
-
-//     if(envgdr) {
-//         for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
-//             client->cuda_info.dev_list[dev_rank].mode = dspaces_CUDA_GDR;
-//         }
-//         client->f_gdr = 1;
-//     }
-// #ifdef HAVE_GDRCOPY
-//     if(envgdrcopy) {
-//         ret = gdrcopy_init(client);
-//         if(ret != dspaces_SUCCESS) {
-//             const char* hint = client->f_gdr ? "GDR" : "Pipeline";
-//             fprintf(stdout, "Warning: Rank %i: switch back to %s mode\n", client->rank, hint);
-//         } else {
-//             ret = check_gdrcopy_support_dev_all(client);
-//             if(ret != dspaces_SUCCESS) {
-//                 gdrcopy_fini(client);
-//                 return dspaces_ERR_CUDA;
-//             }
-//             client->f_gdrcopy = 1;
-//         }
-//     }
-// #endif
+    DEBUG_OUT("dspaces CUDA Mode = %s", hint);
 
     return dspaces_SUCCESS;
 }
@@ -951,7 +938,7 @@ int dspaces_fini(dspaces_client_t client)
     free(client->dcg);
 
 #ifdef HAVE_GDRCOPY
-    if(client->cuda_info.cuda_mode == 3) {
+    if(client->cuda_info.cuda_mode == 4) {
         gdrcopy_fini(client);
         for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
             CUDA_ASSERTDRV(cuDevicePrimaryCtxRelease(client->cuda_info.dev_list[dev_rank].dev));
@@ -1554,6 +1541,126 @@ static inline int is_aligned(const void *ptr, size_t page_size)
 }
 #endif
 
+static int cuda_put_hybrid(dspaces_client_t client, const char *var_name, unsigned int ver,
+                int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
+                const void *data)
+{
+    hg_addr_t server_addr;
+    hg_handle_t handle;
+    hg_return_t hret;
+    bulk_gdim_t in;
+    bulk_out_t out;
+    int ret = dspaces_SUCCESS;
+
+    obj_descriptor odsc = {.version = ver,
+                           .owner = {0},
+                           .st = st,
+                           .flags = 0,
+                           .size = elem_size,
+                           .bb = {
+                               .num_dims = ndim,
+                           }};
+
+    memset(odsc.bb.lb.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+    memset(odsc.bb.ub.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+
+    memcpy(odsc.bb.lb.c, lb, sizeof(uint64_t) * ndim);
+    memcpy(odsc.bb.ub.c, ub, sizeof(uint64_t) * ndim);
+
+    size_t rdma_size = (elem_size)*bbox_volume(&odsc.bb);
+
+    // set the theshold = 48MB, > threshold using pipeline; < threshold using gdr
+    size_t threshold = 48 << 20;
+
+    cudaError_t curet;
+    cudaStream_t stream;
+    void* h_buffer;
+    if(rdma_size >= threshold) {
+        CUDA_ASSERTRT(cudaStreamCreate(&stream));
+        h_buffer = (void*) malloc(rdma_size);
+        curet = cudaMemcpyAsync(buffer, data, rdma_size, cudaMemcpyDeviceToHost, stream);
+        if(curet != cudaSuccess) {
+            fprintf(stderr, "ERROR: (%s): cudaMemcpyAsync() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
+            cudaStreamDestroy(stream);
+            free(buffer);
+            return dspaces_ERR_CUDA;
+        }
+    }
+
+    strncpy(odsc.name, var_name, sizeof(odsc.name) - 1);
+    odsc.name[sizeof(odsc.name) - 1] = '\0';
+    struct global_dimension odsc_gdim;
+    set_global_dimension(&(client->dcg->gdim_list), var_name,
+                         &(client->dcg->default_gdim), &odsc_gdim);
+
+    in.odsc.size = sizeof(odsc);
+    in.odsc.raw_odsc = (char *)(&odsc);
+    in.odsc.gdim_size = sizeof(struct global_dimension);
+    in.odsc.raw_gdim = (char *)(&odsc_gdim);
+    hg_size_t hg_rdma_size = rdma_size;
+
+    if(rdma_size >= threshold) {
+        hret = margo_bulk_create(client->mid, 1, (void **)&h_buffer, &hg_rdma_size,
+                                    HG_BULK_READ_ONLY, &in.handle);
+    } else {
+        hret = margo_bulk_create(client->mid, 1, (void **)&data, &hg_rdma_size,
+                                    HG_BULK_READ_ONLY, &in.handle);
+    }
+
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
+        return dspaces_ERR_MERCURY;
+    }
+
+    get_server_address(client, &server_addr);
+
+    hret = margo_create(client->mid, server_addr, client->put_id, &handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    if(rdma_size >= threshold) {
+        curet = cudaStreamSynchronize(stream);
+        if(curet != cudaSuccess) {
+            fprintf(stderr, "ERROR: (%s): cudaStreamSynchronize() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
+            cudaStreamDestroy(stream);
+            free(buffer);
+            return dspaces_ERR_CUDA;
+        }
+    }
+
+    hret = margo_forward(handle, &in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_forward() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        margo_destroy(handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    hret = margo_get_output(handle, &out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        margo_destroy(handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    ret = out.ret;
+    margo_free_output(handle, &out);
+    margo_bulk_free(in.handle);
+    margo_destroy(handle);
+    margo_addr_free(client->mid, server_addr);
+
+    if(rdma_size >= threshold) {
+        free(buffer);
+        CUDA_ASSERTRT(cudaStreamDestroy(stream));
+    }
+
+    return ret;
+}
+
 int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int ver,
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
                 const void *data)
@@ -1566,54 +1673,31 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
     switch (client->cuda_info.cuda_mode)
     {
     case 0:
-        ret = cuda_put_baseline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        ret = cuda_put_hybrid(client, var_name, ver, elem_size, ndim, lb, ub, data);
         break;
     case 1:
-        ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        ret = cuda_put_baseline(client, var_name, ver, elem_size, ndim, lb, ub, data);
         break;
     case 2:
+        ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        break;
+    case 3:
         ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
         break;
 #ifdef HAVE_GDRCOPY
-    case 3:
+    case 4:
         // check if data pointer is aligned to GPU page defined in gdrcopy
         if(is_aligned(data, GPU_PAGE_SIZE)) {
             ret = cuda_put_gdrcopy(client, var_name, ver, elem_size, ndim, lb, ub, data);
-        } else if (client->f_gdr) {
-            ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
         } else {
-            ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+            ret = cuda_put_hybrid(client, var_name, ver, elem_size, ndim, lb, ub, data);
         }
         break;
 #endif    
     default:
-        ret = cuda_put_baseline(client, var_name, ver, elem_size, ndim, lb, ub, data);
+        ret = cuda_put_hybrid(client, var_name, ver, elem_size, ndim, lb, ub, data);
         break;
     }
-//     switch (client->cuda_info.dev_list[data_dev_rank].mode)
-//     {
-//     case dspaces_CUDA_PIPELINE:
-//         ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
-//         break;
-//     case dspaces_CUDA_GDR:
-//         ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
-//         break;
-// #ifdef HAVE_GDRCOPY
-//     case dspaces_CUDA_GDRCOPY:
-//         // check if data pointer is aligned to GPU page defined in gdrcopy
-//         if(is_aligned(data, GPU_PAGE_SIZE)) {
-//             ret = cuda_put_gdrcopy(client, var_name, ver, elem_size, ndim, lb, ub, data);
-//         } else if (client->f_gdr) {
-//             ret = cuda_put_gdr(client, var_name, ver, elem_size, ndim, lb, ub, data);
-//         } else {
-//             ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
-//         }
-//         break;
-// #endif
-//     default:
-//         ret = cuda_put_pipeline(client, var_name, ver, elem_size, ndim, lb, ub, data);
-//         break;
-//     }
 
     return ret;
 }
