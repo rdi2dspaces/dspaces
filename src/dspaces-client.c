@@ -112,7 +112,8 @@ struct dspaces_cuda_dev_info {
 };
 
 struct dspaces_cuda_info {
-    int cuda_mode;
+    int cuda_put_mode;
+    int cuda_get_mode;
     int dev_num;
     struct dspaces_cuda_dev_info *dev_list;
 #ifdef HAVE_GDRCOPY
@@ -595,19 +596,34 @@ static int dspaces_init_gpu(dspaces_client_t client)
 {
     int ret = dspaces_SUCCESS;
 
-    const char *envcudamode = getenv("DSPACES_CUDA_MODE");
+    const char *envcudaputmode = getenv("DSPACES_CUDA_PUT_MODE");
+    const char *envcudagetmode = getenv("DSPACES_CUDA_GET_MODE");
 
-    // Default Mode: 0 - Hybrid, Others: 1 - Baseline, 2 - Pipeline, 3 - GDR, 4 - GDRCopy
-    if(envcudamode) {
-        int cudamode = atoi(envcudamode);
-        // mode check 0-3
-        if(cudamode >=0 && cudamode < 4) {
-            client->cuda_info.cuda_mode = cudamode;
+    // Default Put Mode: 0 - Hybrid, Others: 1 - Baseline, 2 - Pipeline, 3 - GDR, 4 - GDRCopy
+    if(envcudaputmode) {
+        int cudaputmode = atoi(envcudamode);
+        // mode check 0-4
+        if(cudaputmode >=0 && cudaputmode < 5) {
+            client->cuda_info.cuda_put_mode = cudaputmode;
         } else {
-            client->cuda_info.cuda_mode = 0;
+            client->cuda_info.cuda_put_mode = 0;
         }
     } else {
-        client->cuda_info.cuda_mode = 0;
+        client->cuda_info.cuda_put_mode = 0;
+    }
+
+    // Default Get Mode: 1 - Baseline, Others: 2 - GDR
+    if(envcudagetmode) {
+        int cudagetmode = atoi(envcudagetmode);
+
+        //mode check
+        if(cudagetmode>=1 && cudagetmode <3) {
+            client->cuda_info.cuda_get_mode = cudagetmode;
+        } else {
+            client->cuda_info.cuda_get_mode = 1;
+        }
+    } else {
+        client->cuda_info.cuda_get_mode = 1;
     }
 
     CUDA_ASSERTRT(cudaGetDeviceCount(&client->cuda_info.dev_num));
@@ -619,7 +635,7 @@ static int dspaces_init_gpu(dspaces_client_t client)
     }
 
 #ifdef HAVE_GDRCOPY
-    if(client->cuda_info.cuda_mode == 4) {
+    if(client->cuda_info.cuda_put_mode == 4) {
         ret = gdrcopy_init(client);
         if(ret == dspaces_SUCCESS) {
             ret = check_gdrcopy_support_dev_all(client);
@@ -636,7 +652,7 @@ static int dspaces_init_gpu(dspaces_client_t client)
 #endif
 
     char hint[16];
-    switch (client->cuda_info.cuda_mode)
+    switch (client->cuda_info.cuda_put_mode)
     {
     case 0:
         sprintf(hint, "Hybrid");
@@ -658,7 +674,22 @@ static int dspaces_init_gpu(dspaces_client_t client)
         break;
     }
 
-    DEBUG_OUT("dspaces CUDA Mode = %s", hint);
+    DEBUG_OUT("dspaces CUDA Put Mode = %s", hint);
+
+    switch (client->cuda_info.cuda_get_mode)
+    {
+    case 1:
+        sprintf(hint, "Baseline");
+        break;  
+    case 2:
+        sprintf(hint, "GDR");
+        break;
+    default:
+        sprintf(hint, "Error");
+        break;
+    }
+
+    DEBUG_OUT("dspaces CUDA Get Mode = %s", hint);
 
     return dspaces_SUCCESS;
 }
@@ -938,7 +969,7 @@ int dspaces_fini(dspaces_client_t client)
     free(client->dcg);
 
 #ifdef HAVE_GDRCOPY
-    if(client->cuda_info.cuda_mode == 4) {
+    if(client->cuda_info.cuda_put_mode == 4) {
         gdrcopy_fini(client);
         for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
             CUDA_ASSERTDRV(cuDevicePrimaryCtxRelease(client->cuda_info.dev_list[dev_rank].dev));
@@ -1685,7 +1716,7 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
     struct cudaPointerAttributes ptr_attr;
     CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, data));
     data_dev_rank = ptr_attr.device;
-    switch (client->cuda_info.cuda_mode)
+    switch (client->cuda_info.cuda_put_mode)
     {
     case 0:
         ret = cuda_put_hybrid(client, var_name, ver, elem_size, ndim, lb, ub, data);
@@ -1990,6 +2021,73 @@ static int get_data(dspaces_client_t client, int num_odscs,
     free(return_od);
 
     return 0;
+}
+
+static int get_data_gdr(dspaces_client_t client, int num_odscs,
+                    obj_descriptor req_obj, obj_descriptor *odsc_tab,
+                    void *d_data)
+{
+    int ret = dspaces_SUCCESS;
+    bulk_in_t *in;
+    in = (bulk_in_t *)malloc(sizeof(bulk_in_t) * num_odscs);
+
+    struct obj_data **od;
+    od = malloc(num_odscs * sizeof(struct obj_data *));
+
+    margo_request *serv_req;
+    hg_handle_t *hndl;
+    hndl = (hg_handle_t *)malloc(sizeof(hg_handle_t) * num_odscs);
+    serv_req = (margo_request *)malloc(sizeof(margo_request) * num_odscs);
+
+    for(int i = 0; i < num_odscs; ++i) {
+        od[i] = obj_data_alloc_cuda(&odsc_tab[i]);
+        in[i].odsc.size = sizeof(obj_descriptor);
+        in[i].odsc.raw_odsc = (char *)(&odsc_tab[i]);
+
+        hg_size_t rdma_size = (req_obj.size) * bbox_volume(&odsc_tab[i].bb);
+
+        margo_bulk_create(client->mid, 1, (void **)(&(od[i]->data)), &rdma_size,
+                          HG_BULK_WRITE_ONLY, &in[i].handle);
+
+        hg_addr_t server_addr;
+        margo_addr_lookup(client->mid, odsc_tab[i].owner, &server_addr);
+
+        hg_handle_t handle;
+        if(odsc_tab[i].flags & DS_CLIENT_STORAGE) {
+            DEBUG_OUT("retrieving object from client-local storage.\n");
+            margo_create(client->mid, server_addr, client->get_local_id,
+                         &handle);
+        } else {
+            DEBUG_OUT("retrieving object from server storage.\n");
+            margo_create(client->mid, server_addr, client->get_id, &handle);
+        }
+        margo_request req;
+        // forward get requests
+        margo_iforward(handle, &in[i], &req);
+        hndl[i] = handle;
+        serv_req[i] = req;
+        margo_addr_free(client->mid, server_addr);
+    }
+
+    // return_od is linked to the device ptr
+    struct obj_data *return_od = obj_data_alloc_no_data(&req_obj, d_data);
+
+    for(int i = 0; i < num_odscs; ++i) {
+        margo_wait(serv_req[i]);
+        bulk_out_t resp;
+        margo_get_output(hndl[i], &resp);
+        margo_free_output(hndl[i], &resp);
+        margo_destroy(hndl[i]);
+        // copy received data into user return buffer
+        ret = ssd_copy_cuda(return_od, od[i]);
+        obj_data_free(od[i]);
+    }
+    free(hndl);
+    free(serv_req);
+    free(in);
+    free(return_od);
+
+    return ret;
 }
 
 static int dspaces_init_listener(dspaces_client_t client)
@@ -2335,15 +2433,42 @@ int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int
 
     // send request to get the obj_desc
     if(num_odscs != 0) {
-        size_t rdma_size = elem_size*bbox_volume(&odsc.bb);
-        void* buffer = (void*) malloc(rdma_size);
-        get_data(client, num_odscs, odsc, odsc_tab, buffer);
-        curet = cudaMemcpy(data, buffer, rdma_size, cudaMemcpyHostToDevice);
-        if(curet != cudaSuccess) {
-            fprintf(stderr, "ERROR: (%s): cudaMemcpy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
-            ret = dspaces_ERR_CUDA;
+        switch (client->cuda_info.cuda_get_mode)
+        {
+        // Baseline
+        case 1:
+        {
+            size_t rdma_size = elem_size*bbox_volume(&odsc.bb);
+            void* buffer = (void*) malloc(rdma_size);
+            get_data(client, num_odscs, odsc, odsc_tab, buffer);
+            curet = cudaMemcpy(data, buffer, rdma_size, cudaMemcpyHostToDevice);
+            if(curet != cudaSuccess) {
+                fprintf(stderr, "ERROR: (%s): cudaMemcpy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
+                ret = dspaces_ERR_CUDA;
+            }
+            free(buffer);
+            break;
         }
-        free(buffer);
+        // GDR
+        case 2:
+        {
+            ret = get_data_gdr(client, num_odscs, odsc, odsc_tab, data);
+            break;
+        }
+        default:
+        {
+            size_t rdma_size = elem_size*bbox_volume(&odsc.bb);
+            void* buffer = (void*) malloc(rdma_size);
+            get_data(client, num_odscs, odsc, odsc_tab, buffer);
+            curet = cudaMemcpy(data, buffer, rdma_size, cudaMemcpyHostToDevice);
+            if(curet != cudaSuccess) {
+                fprintf(stderr, "ERROR: (%s): cudaMemcpy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
+                ret = dspaces_ERR_CUDA;
+            }
+            free(buffer);
+            break;
+        }
+        }        
         free(odsc_tab);
     }
 

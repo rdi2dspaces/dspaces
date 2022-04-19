@@ -80,6 +80,26 @@ struct obj_data {
     unsigned int f_free : 1;
 };
 
+/*
+  A view in  the matrix allows to extract any subset  of values from a
+  matrix.
+*/
+
+struct matrix_view {
+    uint64_t lb[BBOX_MAX_NDIM];
+    uint64_t ub[BBOX_MAX_NDIM];
+};
+
+/* Generic matrix representation. */
+struct matrix {
+    uint64_t dist[BBOX_MAX_NDIM];
+    int num_dims;
+    size_t size_elem;
+    enum storage_type mat_storage;
+    struct matrix_view mat_view;
+    void *pdata;
+};
+
 struct gdim_list_entry {
     struct list_head entry;
     char *var_name;
@@ -303,6 +323,7 @@ void ssd_free(struct sspace *);
 //
 
 int ssd_copy(struct obj_data *, struct obj_data *);
+int ssd_copy_cuda(struct obj_data *, struct obj_data *);
 //
 long ssh_hash_elem_count(struct sspace *ss, const struct bbox *bb);
 //
@@ -335,12 +356,14 @@ int ls_find_ods(ss_storage *ls, obj_descriptor *odsc, obj_descriptor ***od_tab);
 struct obj_data *ls_find_no_version(ss_storage *, obj_descriptor *);
 
 struct obj_data *obj_data_alloc(obj_descriptor *);
+struct obj_data *obj_data_alloc_cuda(obj_descriptor *);
 struct obj_data *obj_data_alloc_no_data(obj_descriptor *, void *);
 struct obj_data *obj_data_alloc_with_data(obj_descriptor *, void *);
 
 void meta_data_free(struct meta_data *mdata);
 
 void obj_data_free(struct obj_data *od);
+void obj_data_free_cuda(struct obj_data *od);
 uint64_t obj_data_size(obj_descriptor *);
 
 int obj_desc_equals(obj_descriptor *, obj_descriptor *);

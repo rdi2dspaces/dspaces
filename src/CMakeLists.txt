@@ -17,7 +17,8 @@ if(HAVE_GDRCOPY)
 endif()
 
 # list of source files
-set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c)
+set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c ssd_copy.cu)
+set_source_files_properties(ssd_copy.cu PROPERTIES LANGUAGE "CUDA")
 
 # load package helper for generating cmake CONFIG packages
 include (CMakePackageConfigHelpers)
@@ -28,6 +29,7 @@ set (dspaces-pkg "share/cmake/dspaces")
 set (dspaces-vers "${dspaces_VERSION_MAJOR}.${dspaces_VERSION_MINOR}")
 
 add_library(dspaces ${dspaces-src})
+set_target_properties(dspaces PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
 # We need both cuda driver and cuda runtime headers and libs
 # ${CUDA_LIBRARIES} returned by find_package(CUDA) only has the cuda runtime libs
