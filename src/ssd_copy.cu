@@ -1,5 +1,6 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+#include "bbox.h"
 #include "ss_data.h"
 #include "dspaces-common.h"
 
