@@ -752,3 +752,39 @@ int ssd_copy_cuda(struct obj_data *to_obj, struct obj_data *from_obj)
 
     return ret;
 }
+
+struct obj_data *obj_data_alloc_cuda(obj_descriptor *odsc)
+{
+    struct obj_data *od = 0;
+
+    od = malloc(sizeof(*od));
+    if(!od) {
+        fprintf(stderr, "Malloc od error\n");
+        return NULL;
+    }
+    memset(od, 0, sizeof(*od));
+
+    int size = obj_data_size(odsc);
+    cudaError_t curet = cudaMalloc(od->data, size);
+    if(curet != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc od_data error\n");
+        free(od);
+        return NULL;
+    }
+    od->obj_desc = *odsc;
+
+    return od;
+}
+
+void obj_data_free_cuda(struct obj_data *od)
+{
+    if(od) {
+        if(od->data) {
+            cudaError_t curet =cudaFree(od->data);
+            if(curet != cudaSuccess) {
+                fprintf(stderr, "cudaFree od_data error\n");
+            }
+        }
+        free(od);
+    }
+}
