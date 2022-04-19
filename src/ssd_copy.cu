@@ -251,6 +251,41 @@ static int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src)
     dim3 dimblock( BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z );
     dim3 dimgrid( GRID_SIZE_X, GRID_SIZE_Y, GRID_SIZE_Z );
 
+    switch(dst->num_dims) {
+        case 1:
+            goto ndimleq3;
+            break;
+        case 2:
+            goto ndimleq3;
+            break;
+        case 3:
+            goto ndimleq3;
+            break;
+        case 4:
+            goto ndim4;
+            break;
+        case 5:
+            goto ndim5;
+            break;
+        case 6:
+            goto ndim6;
+            break;
+        case 7:
+            goto ndim7;
+            break;
+        case 8:
+            goto ndim8;
+            break;
+        case 9:
+            goto ndim9;
+            break;
+        case 10:
+            goto ndim10;
+            break;
+        default:
+            return dspaces_ERR_INVALID_ARG;
+            break;
+        }
 
 ndim10:
     for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view.lb[9];
@@ -386,6 +421,41 @@ static int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src)
     dim3 dimblock( BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z );
     dim3 dimgrid( GRID_SIZE_X, GRID_SIZE_Y, GRID_SIZE_Z );
 
+    switch(dst->num_dims) {
+        case 1:
+            goto ndimleq3;
+            break;
+        case 2:
+            goto ndimleq3;
+            break;
+        case 3:
+            goto ndimleq3;
+            break;
+        case 4:
+            goto ndim4;
+            break;
+        case 5:
+            goto ndim5;
+            break;
+        case 6:
+            goto ndim6;
+            break;
+        case 7:
+            goto ndim7;
+            break;
+        case 8:
+            goto ndim8;
+            break;
+        case 9:
+            goto ndim9;
+            break;
+        case 10:
+            goto ndim10;
+            break;
+        default:
+            return dspaces_ERR_INVALID_ARG;
+            break;
+        }
 
 ndim10:
     for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view.lb[9];
@@ -521,6 +591,41 @@ static int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src)
     dim3 dimblock( BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z );
     dim3 dimgrid( GRID_SIZE_X, GRID_SIZE_Y, GRID_SIZE_Z );
 
+    switch(dst->num_dims) {
+        case 1:
+            goto ndimleq3;
+            break;
+        case 2:
+            goto ndimleq3;
+            break;
+        case 3:
+            goto ndimleq3;
+            break;
+        case 4:
+            goto ndim4;
+            break;
+        case 5:
+            goto ndim5;
+            break;
+        case 6:
+            goto ndim6;
+            break;
+        case 7:
+            goto ndim7;
+            break;
+        case 8:
+            goto ndim8;
+            break;
+        case 9:
+            goto ndim9;
+            break;
+        case 10:
+            goto ndim10;
+            break;
+        default:
+            return dspaces_ERR_INVALID_ARG;
+            break;
+        }
 
 ndim10:
     for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view.lb[9];
@@ -658,6 +763,41 @@ static int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src)
     dim3 dimblock( BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z );
     dim3 dimgrid( GRID_SIZE_X, GRID_SIZE_Y, GRID_SIZE_Z );
 
+    switch(dst->num_dims) {
+        case 1:
+            goto ndimleq3;
+            break;
+        case 2:
+            goto ndimleq3;
+            break;
+        case 3:
+            goto ndimleq3;
+            break;
+        case 4:
+            goto ndim4;
+            break;
+        case 5:
+            goto ndim5;
+            break;
+        case 6:
+            goto ndim6;
+            break;
+        case 7:
+            goto ndim7;
+            break;
+        case 8:
+            goto ndim8;
+            break;
+        case 9:
+            goto ndim9;
+            break;
+        case 10:
+            goto ndim10;
+            break;
+        default:
+            return dspaces_ERR_INVALID_ARG;
+            break;
+        }
 
 ndim10:
     for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view.lb[9];
