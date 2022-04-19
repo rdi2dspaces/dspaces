@@ -184,9 +184,8 @@ static int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src)
 {
     double *d = (double*) dst->pdata;
     double *s = (double*) src->pdata;
-    uint64_t num_copied_elem = 0;
 
-    int BLOCK_THREAD_SIZE = 1024;
+    // int BLOCK_THREAD_SIZE = 1024;
     int BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z;
     int sub_nx, sub_ny, sub_nz;
     int GRID_SIZE_X, GRID_SIZE_Y, GRID_SIZE_Z;
@@ -320,9 +319,8 @@ static int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src)
 {
     float *d = (float*) dst->pdata;
     float *s = (float*) src->pdata;
-    uint64_t num_copied_elem = 0;
 
-    int BLOCK_THREAD_SIZE = 1024;
+    // int BLOCK_THREAD_SIZE = 1024;
     int BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z;
     int sub_nx, sub_ny, sub_nz;
     int GRID_SIZE_X, GRID_SIZE_Y, GRID_SIZE_Z;
@@ -456,9 +454,8 @@ static int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src)
 {
     short *d = (short*) dst->pdata;
     short *s = (short*) src->pdata;
-    uint64_t num_copied_elem = 0;
 
-    int BLOCK_THREAD_SIZE = 1024;
+    // int BLOCK_THREAD_SIZE = 1024;
     int BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z;
     int sub_nx, sub_ny, sub_nz;
     int GRID_SIZE_X, GRID_SIZE_Y, GRID_SIZE_Z;
@@ -592,9 +589,8 @@ static int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src)
 {
     char *d = (char*) dst->pdata;
     char *s = (char*) src->pdata;
-    uint64_t num_copied_elem = 0;
-
-    int BLOCK_THREAD_SIZE = 1024;
+    
+    // int BLOCK_THREAD_SIZE = 1024;
     int BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z;
     int sub_nx, sub_ny, sub_nz;
     int GRID_SIZE_X, GRID_SIZE_Y, GRID_SIZE_Z;

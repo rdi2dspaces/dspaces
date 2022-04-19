@@ -579,9 +579,9 @@ int ssd_hash_v2(struct sspace *ss, const struct bbox *bb,
     return num_nodes;
 }
 
-static void matrix_init(struct matrix *mat, enum storage_type st,
-                        struct bbox *bb_glb, struct bbox *bb_loc, void *pdata,
-                        size_t se)
+void matrix_init(struct matrix *mat, enum storage_type st,
+                 struct bbox *bb_glb, struct bbox *bb_loc, void *pdata,
+                 size_t se)
 {
     int i;
     int ndims = bb_glb->num_dims;
