@@ -63,7 +63,7 @@
                         client->rank, __FILE__, __LINE__, __func__, #stmt,      \
                         cudaGetErrorString(err));                               \
             }                                                                   \
-            CUDA_ASSERT(CUDA_SUCCESS == err);                                \
+            CUDA_ASSERT(cudaSuccess == err);                                \
         } while (0)
 
 #define CUDA_ASSERTDRV(stmt)				                                    \

@@ -25,7 +25,7 @@
                         __FILE__, __LINE__, __func__, #stmt,      \
                         cudaGetErrorString(err));                               \
             }                                                                   \
-            CUDA_ASSERT(CUDA_SUCCESS == err);                                \
+            CUDA_ASSERT(cudaSuccess == err);                                \
         } while (0)
 
 __global__ void copy_subarray_c_double(double *dst, double *src, int dst_nx, int dst_ny, int dst_nz,
