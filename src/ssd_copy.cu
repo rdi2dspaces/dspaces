@@ -8,9 +8,9 @@
         {                                                                       \
             if (!(x))                                                           \
                 {                                                               \
-                    fprintf(stderr, "Rank %i: %s, line %i (%s):"                \
+                    fprintf(stderr, "%s, line %i (%s):"                \
                             "Assertion %s failed!\n",                           \
-                            client->rank, __FILE__, __LINE__, __func__, #x);    \
+                            __FILE__, __LINE__, __func__, #x);    \
                     return dspaces_ERR_CUDA;                                    \
                 }                                                               \
         } while (0)
@@ -182,8 +182,8 @@ __global__ void copy_subarray_f_char(char *dst, char *src, int dst_nx, int dst_n
 
 static int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src)
 {
-    double *d = dst->pdata;
-    double *s = src->pdata;
+    double *d = (double*) dst->pdata;
+    double *s = (double*) src->pdata;
     uint64_t num_copied_elem = 0;
 
     int BLOCK_THREAD_SIZE = 1024;
@@ -203,7 +203,7 @@ static int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src)
 
     // Use non-parallel design for unit benchmark
     cudaStream_t stream;
-    CUDA_ASSERTRT(cudaStreamCreate(&stream, cudaStreamNonBlocking));
+    CUDA_ASSERTRT(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
     if(dst->num_dims == 1) {
         BLOCK_SIZE_X = 256; 
@@ -254,37 +254,37 @@ static int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src)
 
 
 ndim10:
-    for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view->lb[9];
+    for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view.lb[9];
         dst9 <= dst->mat_view.ub[9]; dst9++, src9++) {
         dst_off9 = dst9 * dst->dist[8];
         src_off9 = src9 * src->dist[8];
     ndim9:
-        for(dst8 = dst->mat_view.lb[8], src8 = src->mat_view->lb[8];
+        for(dst8 = dst->mat_view.lb[8], src8 = src->mat_view.lb[8];
             dst8 <= dst->mat_view.ub[8]; dst8++, src8++) {
             dst_off8 = (dst_off9 + dst8) * dst->dist[7];
             src_off8 = (src_off9 + src8) * src->dist[7];
         ndim8:
-            for(dst7 = dst->mat_view.lb[7], src7 = src->mat_view->lb[7];
+            for(dst7 = dst->mat_view.lb[7], src7 = src->mat_view.lb[7];
                 dst7 <= dst->mat_view.ub[7]; dst7++, src7++) {
                 dst_off7 = (dst_off8 + dst7) * dst->dist[6];
                 src_off7 = (src_off8 + src7) * src->dist[6];
             ndim7:
-                for(dst6 = dst->mat_view.lb[6], src6 = src->mat_view->lb[6];
+                for(dst6 = dst->mat_view.lb[6], src6 = src->mat_view.lb[6];
                     dst6 <= dst->mat_view.ub[6]; dst6++, src6++) {
                     dst_off6 = (dst_off7 + dst6) * dst->dist[5];
                     src_off6 = (src_off7 + src6) * src->dist[5];
                 ndim6:
-                    for(dst5 = dst->mat_view.lb[5], src5 = src->mat_view->lb[5];
+                    for(dst5 = dst->mat_view.lb[5], src5 = src->mat_view.lb[5];
                         dst5 <= dst->mat_view.ub[5]; dst5++, src5++) {
                         dst_off5 = (dst_off6 + dst5) * dst->dist[4];
                         src_off5 = (src_off6 + src5) * src->dist[4];
                     ndim5:
-                        for(dst4 = dst->mat_view.lb[4], src4 = src->mat_view->lb[4];
+                        for(dst4 = dst->mat_view.lb[4], src4 = src->mat_view.lb[4];
                             dst4 <= dst->mat_view.ub[4]; dst4++, src4++) {
                             dst_off4 = (dst_off5 + dst4) * dst->dist[3];
                             src_off4 = (src_off5 + src4) * src->dist[3];
                         ndim4:
-                            for(dst3 = dst->mat_view.lb[3], src3 = src->mat_view->lb[3];
+                            for(dst3 = dst->mat_view.lb[3], src3 = src->mat_view.lb[3];
                                 dst3 <= dst->mat_view.ub[3]; dst3++, src3++) {
                                 dst_off = (dst_off4 + dst3) * dst_stride3 + dst_off3;
                                 src_off = (src_off4 + src3) * src_stride3 + dst_off3;
@@ -318,8 +318,8 @@ ndim10:
 
 static int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src)
 {
-    float *d = dst->pdata;
-    float *s = src->pdata;
+    float *d = (float*) dst->pdata;
+    float *s = (float*) src->pdata;
     uint64_t num_copied_elem = 0;
 
     int BLOCK_THREAD_SIZE = 1024;
@@ -339,7 +339,7 @@ static int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src)
 
     // Use non-parallel design for unit benchmark
     cudaStream_t stream;
-    CUDA_ASSERTRT(cudaStreamCreate(&stream, cudaStreamNonBlocking));
+    CUDA_ASSERTRT(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
     if(dst->num_dims == 1) {
         BLOCK_SIZE_X = 256; 
@@ -390,37 +390,37 @@ static int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src)
 
 
 ndim10:
-    for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view->lb[9];
+    for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view.lb[9];
         dst9 <= dst->mat_view.ub[9]; dst9++, src9++) {
         dst_off9 = dst9 * dst->dist[8];
         src_off9 = src9 * src->dist[8];
     ndim9:
-        for(dst8 = dst->mat_view.lb[8], src8 = src->mat_view->lb[8];
+        for(dst8 = dst->mat_view.lb[8], src8 = src->mat_view.lb[8];
             dst8 <= dst->mat_view.ub[8]; dst8++, src8++) {
             dst_off8 = (dst_off9 + dst8) * dst->dist[7];
             src_off8 = (src_off9 + src8) * src->dist[7];
         ndim8:
-            for(dst7 = dst->mat_view.lb[7], src7 = src->mat_view->lb[7];
+            for(dst7 = dst->mat_view.lb[7], src7 = src->mat_view.lb[7];
                 dst7 <= dst->mat_view.ub[7]; dst7++, src7++) {
                 dst_off7 = (dst_off8 + dst7) * dst->dist[6];
                 src_off7 = (src_off8 + src7) * src->dist[6];
             ndim7:
-                for(dst6 = dst->mat_view.lb[6], src6 = src->mat_view->lb[6];
+                for(dst6 = dst->mat_view.lb[6], src6 = src->mat_view.lb[6];
                     dst6 <= dst->mat_view.ub[6]; dst6++, src6++) {
                     dst_off6 = (dst_off7 + dst6) * dst->dist[5];
                     src_off6 = (src_off7 + src6) * src->dist[5];
                 ndim6:
-                    for(dst5 = dst->mat_view.lb[5], src5 = src->mat_view->lb[5];
+                    for(dst5 = dst->mat_view.lb[5], src5 = src->mat_view.lb[5];
                         dst5 <= dst->mat_view.ub[5]; dst5++, src5++) {
                         dst_off5 = (dst_off6 + dst5) * dst->dist[4];
                         src_off5 = (src_off6 + src5) * src->dist[4];
                     ndim5:
-                        for(dst4 = dst->mat_view.lb[4], src4 = src->mat_view->lb[4];
+                        for(dst4 = dst->mat_view.lb[4], src4 = src->mat_view.lb[4];
                             dst4 <= dst->mat_view.ub[4]; dst4++, src4++) {
                             dst_off4 = (dst_off5 + dst4) * dst->dist[3];
                             src_off4 = (src_off5 + src4) * src->dist[3];
                         ndim4:
-                            for(dst3 = dst->mat_view.lb[3], src3 = src->mat_view->lb[3];
+                            for(dst3 = dst->mat_view.lb[3], src3 = src->mat_view.lb[3];
                                 dst3 <= dst->mat_view.ub[3]; dst3++, src3++) {
                                 dst_off = (dst_off4 + dst3) * dst_stride3 + dst_off3;
                                 src_off = (src_off4 + src3) * src_stride3 + dst_off3;
@@ -454,8 +454,8 @@ ndim10:
 
 static int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src)
 {
-    short *d = dst->pdata;
-    short *s = src->pdata;
+    short *d = (short*) dst->pdata;
+    short *s = (short*) src->pdata;
     uint64_t num_copied_elem = 0;
 
     int BLOCK_THREAD_SIZE = 1024;
@@ -475,7 +475,7 @@ static int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src)
 
     // Use non-parallel design for unit benchmark
     cudaStream_t stream;
-    CUDA_ASSERTRT(cudaStreamCreate(&stream, cudaStreamNonBlocking));
+    CUDA_ASSERTRT(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
     if(dst->num_dims == 1) {
         BLOCK_SIZE_X = 256; 
@@ -526,37 +526,37 @@ static int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src)
 
 
 ndim10:
-    for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view->lb[9];
+    for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view.lb[9];
         dst9 <= dst->mat_view.ub[9]; dst9++, src9++) {
         dst_off9 = dst9 * dst->dist[8];
         src_off9 = src9 * src->dist[8];
     ndim9:
-        for(dst8 = dst->mat_view.lb[8], src8 = src->mat_view->lb[8];
+        for(dst8 = dst->mat_view.lb[8], src8 = src->mat_view.lb[8];
             dst8 <= dst->mat_view.ub[8]; dst8++, src8++) {
             dst_off8 = (dst_off9 + dst8) * dst->dist[7];
             src_off8 = (src_off9 + src8) * src->dist[7];
         ndim8:
-            for(dst7 = dst->mat_view.lb[7], src7 = src->mat_view->lb[7];
+            for(dst7 = dst->mat_view.lb[7], src7 = src->mat_view.lb[7];
                 dst7 <= dst->mat_view.ub[7]; dst7++, src7++) {
                 dst_off7 = (dst_off8 + dst7) * dst->dist[6];
                 src_off7 = (src_off8 + src7) * src->dist[6];
             ndim7:
-                for(dst6 = dst->mat_view.lb[6], src6 = src->mat_view->lb[6];
+                for(dst6 = dst->mat_view.lb[6], src6 = src->mat_view.lb[6];
                     dst6 <= dst->mat_view.ub[6]; dst6++, src6++) {
                     dst_off6 = (dst_off7 + dst6) * dst->dist[5];
                     src_off6 = (src_off7 + src6) * src->dist[5];
                 ndim6:
-                    for(dst5 = dst->mat_view.lb[5], src5 = src->mat_view->lb[5];
+                    for(dst5 = dst->mat_view.lb[5], src5 = src->mat_view.lb[5];
                         dst5 <= dst->mat_view.ub[5]; dst5++, src5++) {
                         dst_off5 = (dst_off6 + dst5) * dst->dist[4];
                         src_off5 = (src_off6 + src5) * src->dist[4];
                     ndim5:
-                        for(dst4 = dst->mat_view.lb[4], src4 = src->mat_view->lb[4];
+                        for(dst4 = dst->mat_view.lb[4], src4 = src->mat_view.lb[4];
                             dst4 <= dst->mat_view.ub[4]; dst4++, src4++) {
                             dst_off4 = (dst_off5 + dst4) * dst->dist[3];
                             src_off4 = (src_off5 + src4) * src->dist[3];
                         ndim4:
-                            for(dst3 = dst->mat_view.lb[3], src3 = src->mat_view->lb[3];
+                            for(dst3 = dst->mat_view.lb[3], src3 = src->mat_view.lb[3];
                                 dst3 <= dst->mat_view.ub[3]; dst3++, src3++) {
                                 dst_off = (dst_off4 + dst3) * dst_stride3 + dst_off3;
                                 src_off = (src_off4 + src3) * src_stride3 + dst_off3;
@@ -590,8 +590,8 @@ ndim10:
 
 static int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src)
 {
-    char *d = dst->pdata;
-    char *s = src->pdata;
+    char *d = (char*) dst->pdata;
+    char *s = (char*) src->pdata;
     uint64_t num_copied_elem = 0;
 
     int BLOCK_THREAD_SIZE = 1024;
@@ -611,7 +611,7 @@ static int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src)
 
     // Use non-parallel design for unit benchmark
     cudaStream_t stream;
-    CUDA_ASSERTRT(cudaStreamCreate(&stream, cudaStreamNonBlocking));
+    CUDA_ASSERTRT(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
     // char function is used for arbitrary data types
     // Therefore, it needs to multiply elem_size to calculate the offsets and copy sizes
@@ -664,37 +664,37 @@ static int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src)
 
 
 ndim10:
-    for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view->lb[9];
+    for(dst9 = dst->mat_view.lb[9], src9 = src->mat_view.lb[9];
         dst9 <= dst->mat_view.ub[9]; dst9++, src9++) {
         dst_off9 = dst9 * dst->dist[8];
         src_off9 = src9 * src->dist[8];
     ndim9:
-        for(dst8 = dst->mat_view.lb[8], src8 = src->mat_view->lb[8];
+        for(dst8 = dst->mat_view.lb[8], src8 = src->mat_view.lb[8];
             dst8 <= dst->mat_view.ub[8]; dst8++, src8++) {
             dst_off8 = (dst_off9 + dst8) * dst->dist[7];
             src_off8 = (src_off9 + src8) * src->dist[7];
         ndim8:
-            for(dst7 = dst->mat_view.lb[7], src7 = src->mat_view->lb[7];
+            for(dst7 = dst->mat_view.lb[7], src7 = src->mat_view.lb[7];
                 dst7 <= dst->mat_view.ub[7]; dst7++, src7++) {
                 dst_off7 = (dst_off8 + dst7) * dst->dist[6];
                 src_off7 = (src_off8 + src7) * src->dist[6];
             ndim7:
-                for(dst6 = dst->mat_view.lb[6], src6 = src->mat_view->lb[6];
+                for(dst6 = dst->mat_view.lb[6], src6 = src->mat_view.lb[6];
                     dst6 <= dst->mat_view.ub[6]; dst6++, src6++) {
                     dst_off6 = (dst_off7 + dst6) * dst->dist[5];
                     src_off6 = (src_off7 + src6) * src->dist[5];
                 ndim6:
-                    for(dst5 = dst->mat_view.lb[5], src5 = src->mat_view->lb[5];
+                    for(dst5 = dst->mat_view.lb[5], src5 = src->mat_view.lb[5];
                         dst5 <= dst->mat_view.ub[5]; dst5++, src5++) {
                         dst_off5 = (dst_off6 + dst5) * dst->dist[4];
                         src_off5 = (src_off6 + src5) * src->dist[4];
                     ndim5:
-                        for(dst4 = dst->mat_view.lb[4], src4 = src->mat_view->lb[4];
+                        for(dst4 = dst->mat_view.lb[4], src4 = src->mat_view.lb[4];
                             dst4 <= dst->mat_view.ub[4]; dst4++, src4++) {
                             dst_off4 = (dst_off5 + dst4) * dst->dist[3];
                             src_off4 = (src_off5 + src4) * src->dist[3];
                         ndim4:
-                            for(dst3 = dst->mat_view.lb[3], src3 = src->mat_view->lb[3];
+                            for(dst3 = dst->mat_view.lb[3], src3 = src->mat_view.lb[3];
                                 dst3 <= dst->mat_view.ub[3]; dst3++, src3++) {
                                 dst_off = (dst_off4 + dst3) * dst_stride3 + dst_off3;
                                 src_off = (src_off4 + src3) * src_stride3 + dst_off3;
