@@ -601,7 +601,7 @@ static int dspaces_init_gpu(dspaces_client_t client)
 
     // Default Put Mode: 0 - Hybrid, Others: 1 - Baseline, 2 - Pipeline, 3 - GDR, 4 - GDRCopy
     if(envcudaputmode) {
-        int cudaputmode = atoi(envcudamode);
+        int cudaputmode = atoi(envcudaputmode);
         // mode check 0-4
         if(cudaputmode >=0 && cudaputmode < 5) {
             client->cuda_info.cuda_put_mode = cudaputmode;
