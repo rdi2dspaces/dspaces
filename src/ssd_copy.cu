@@ -753,7 +753,7 @@ struct obj_data *obj_data_alloc_cuda(obj_descriptor *odsc)
 {
     struct obj_data *od = 0;
 
-    od = malloc(sizeof(*od));
+    od = (struct obj_data *) malloc(sizeof(*od));
     if(!od) {
         fprintf(stderr, "Malloc od error\n");
         return NULL;
@@ -761,7 +761,7 @@ struct obj_data *obj_data_alloc_cuda(obj_descriptor *odsc)
     memset(od, 0, sizeof(*od));
 
     int size = obj_data_size(odsc);
-    cudaError_t curet = cudaMalloc(od->data, size);
+    cudaError_t curet = cudaMalloc((void**)&od->data, size);
     if(curet != cudaSuccess) {
         fprintf(stderr, "cudaMalloc od_data error\n");
         free(od);
