@@ -42,6 +42,8 @@ p
 #include "queue.h"
 #include <errno.h>
 #include <math.h>
+#include "dspaces-common.h"
+#include <cuda_runtime_api.h>
 
 #include <abt.h>
 
@@ -1876,10 +1878,10 @@ char **addr_str_buf_to_list(char *buf, int num_addrs)
     return ret;
 }
 
-extern int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src)
-extern int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src)
-extern int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src)
-extern int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src)
+extern int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src);
+extern int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src);
+extern int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src);
+extern int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src);
 
 int ssd_copy_cuda(struct obj_data *to_obj, struct obj_data *from_obj)
 {
