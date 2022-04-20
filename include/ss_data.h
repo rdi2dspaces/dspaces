@@ -322,7 +322,7 @@ int ssd_init(struct sspace *, int);
 void ssd_free(struct sspace *);
 //
 
-void matrix_init(struct matrix *, enum storage_type, struct bbox *, struct bbox *, void *, size_t );
+void matrix_init(struct matrix *, enum storage_type, struct bbox *, struct bbox *, void *, size_t);
 
 int ssd_copy(struct obj_data *, struct obj_data *);
 int ssd_copy_cuda(struct obj_data *, struct obj_data *);
