@@ -6,8 +6,10 @@ endif()
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.17)
     find_package(CUDAToolkit)
+    include_directories(${CUDAToolkit_INCLUDE_DIRS})
 else()
     find_package(CUDA)
+    include_directories(${CUDA_INCLUDE_DIRS})
 endif()
 
 find_package(GDRCOPY)
@@ -17,7 +19,7 @@ if(HAVE_GDRCOPY)
 endif()
 
 # list of source files
-set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c ssd_copy.cu)
+set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c ss_data_cuda.c ssd_copy.cu)
 set_source_files_properties(ssd_copy.cu PROPERTIES LANGUAGE "CUDA")
 
 # load package helper for generating cmake CONFIG packages
