@@ -1,4 +1,7 @@
+#include <cuda.h>
+#include <cuda_runtime_api.h>
 #include "ss_data.h"
+#include "dspaces-common.h"
 
 
 int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src);
