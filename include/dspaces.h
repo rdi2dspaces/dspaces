@@ -383,7 +383,7 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
 
 int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int ver,
                      int elem_size, int ndim, uint64_t *lb, uint64_t *ub, void *data,
-                     int timeout);
+                     int timeout, double* ttime, double* ctime);
 
 #if defined(__cplusplus)
 }
