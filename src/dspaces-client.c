@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+#include <sys/time.h>
 
 #ifdef HAVE_DRC
 #include <rdmacred.h>
@@ -2023,10 +2024,84 @@ static int get_data(dspaces_client_t client, int num_odscs,
     return 0;
 }
 
+static int get_data_baseline(dspaces_client_t client, int num_odscs,
+                    obj_descriptor req_obj, obj_descriptor *odsc_tab,
+                    void *data, double *ctime)
+{
+    struct timeval start, end;
+    double timer = 0; // timer in second
+    bulk_in_t *in;
+    in = (bulk_in_t *)malloc(sizeof(bulk_in_t) * num_odscs);
+
+    struct obj_data **od;
+    od = malloc(num_odscs * sizeof(struct obj_data *));
+
+    margo_request *serv_req;
+    hg_handle_t *hndl;
+    hndl = (hg_handle_t *)malloc(sizeof(hg_handle_t) * num_odscs);
+    serv_req = (margo_request *)malloc(sizeof(margo_request) * num_odscs);
+
+    for(int i = 0; i < num_odscs; ++i) {
+        od[i] = obj_data_alloc(&odsc_tab[i]);
+        in[i].odsc.size = sizeof(obj_descriptor);
+        in[i].odsc.raw_odsc = (char *)(&odsc_tab[i]);
+
+        hg_size_t rdma_size = (req_obj.size) * bbox_volume(&odsc_tab[i].bb);
+
+        margo_bulk_create(client->mid, 1, (void **)(&(od[i]->data)), &rdma_size,
+                          HG_BULK_WRITE_ONLY, &in[i].handle);
+
+        hg_addr_t server_addr;
+        margo_addr_lookup(client->mid, odsc_tab[i].owner, &server_addr);
+
+        hg_handle_t handle;
+        if(odsc_tab[i].flags & DS_CLIENT_STORAGE) {
+            DEBUG_OUT("retrieving object from client-local storage.\n");
+            margo_create(client->mid, server_addr, client->get_local_id,
+                         &handle);
+        } else {
+            DEBUG_OUT("retrieving object from server storage.\n");
+            margo_create(client->mid, server_addr, client->get_id, &handle);
+        }
+        margo_request req;
+        // forward get requests
+        margo_iforward(handle, &in[i], &req);
+        hndl[i] = handle;
+        serv_req[i] = req;
+        margo_addr_free(client->mid, server_addr);
+    }
+
+    struct obj_data *return_od = obj_data_alloc_no_data(&req_obj, data);
+
+    // TODO: rewrite with margo_wait_any()
+    for(int i = 0; i < num_odscs; ++i) {
+        margo_wait(serv_req[i]);
+        bulk_out_t resp;
+        margo_get_output(hndl[i], &resp);
+        margo_free_output(hndl[i], &resp);
+        margo_destroy(hndl[i]);
+        // copy received data into user return buffer
+        gettimeofday(&start, NULL);
+        ssd_copy(return_od, od[i]);
+        gettimeofday(&end, NULL);
+        timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
+        obj_data_free(od[i]);
+    }
+    free(hndl);
+    free(serv_req);
+    free(in);
+    free(return_od);
+
+    *ctime = timer;
+    return 0;
+}
+
 static int get_data_gdr(dspaces_client_t client, int num_odscs,
                     obj_descriptor req_obj, obj_descriptor *odsc_tab,
-                    void *d_data)
+                    void *d_data, double *ctime)
 {
+    struct timeval start, end;
+    double timer = 0; // timer in second
     int ret = dspaces_SUCCESS;
     bulk_in_t *in;
     in = (bulk_in_t *)malloc(sizeof(bulk_in_t) * num_odscs);
@@ -2079,7 +2154,10 @@ static int get_data_gdr(dspaces_client_t client, int num_odscs,
         margo_free_output(hndl[i], &resp);
         margo_destroy(hndl[i]);
         // copy received data into user return buffer
+        gettimeofday(&start, NULL);
         ret = ssd_copy_cuda(return_od, od[i]);
+        gettimeofday(&end, NULL);
+        timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
         obj_data_free(od[i]);
     }
     free(hndl);
@@ -2087,6 +2165,7 @@ static int get_data_gdr(dspaces_client_t client, int num_odscs,
     free(in);
     free(return_od);
 
+    *ctime = timer;
     return ret;
 }
 
@@ -2412,8 +2491,10 @@ int dspaces_get(dspaces_client_t client, const char *var_name, unsigned int ver,
 
 int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int ver,
                      int elem_size, int ndim, uint64_t *lb, uint64_t *ub, void *data,
-                     int timeout)
+                     int timeout, double* ttime, double* ctime)
 {
+    struct timeval start, end;
+    double timer = 0; // timer in second
     obj_descriptor odsc;
     obj_descriptor *odsc_tab;
     int num_odscs;
@@ -2440,7 +2521,10 @@ int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int
         {
             size_t rdma_size = elem_size*bbox_volume(&odsc.bb);
             void* buffer = (void*) malloc(rdma_size);
-            get_data(client, num_odscs, odsc, odsc_tab, buffer);
+            gettimeofday(&start, NULL);
+            get_data_baseline(client, num_odscs, odsc, odsc_tab, buffer, ctime);
+            gettimeofday(&end, NULL);
+            timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
             curet = cudaMemcpy(data, buffer, rdma_size, cudaMemcpyHostToDevice);
             if(curet != cudaSuccess) {
                 fprintf(stderr, "ERROR: (%s): cudaMemcpy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
@@ -2452,14 +2536,20 @@ int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int
         // GDR
         case 2:
         {
-            ret = get_data_gdr(client, num_odscs, odsc, odsc_tab, data);
+            gettimeofday(&start, NULL);
+            ret = get_data_gdr(client, num_odscs, odsc, odsc_tab, data, ctime);
+            gettimeofday(&end, NULL);
+            timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
             break;
         }
         default:
         {
             size_t rdma_size = elem_size*bbox_volume(&odsc.bb);
             void* buffer = (void*) malloc(rdma_size);
-            get_data(client, num_odscs, odsc, odsc_tab, buffer);
+            gettimeofday(&start, NULL);
+            get_data_baseline(client, num_odscs, odsc, odsc_tab, buffer, ctime);
+            gettimeofday(&end, NULL);
+            timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
             curet = cudaMemcpy(data, buffer, rdma_size, cudaMemcpyHostToDevice);
             if(curet != cudaSuccess) {
                 fprintf(stderr, "ERROR: (%s): cudaMemcpy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
@@ -2468,7 +2558,8 @@ int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int
             free(buffer);
             break;
         }
-        }        
+        }
+        *ttime = timer - *ctime;    
         free(odsc_tab);
     }
 
