@@ -2158,7 +2158,7 @@ static int get_data_gdr(dspaces_client_t client, int num_odscs,
         ret = ssd_copy_cuda(return_od, od[i]);
         gettimeofday(&end, NULL);
         timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
-        obj_data_free(od[i]);
+        obj_data_free_cuda(od[i]);
     }
     free(hndl);
     free(serv_req);
