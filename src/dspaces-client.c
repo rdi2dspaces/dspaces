@@ -1383,8 +1383,13 @@ static int cuda_put_gdr(dspaces_client_t client, const char *var_name, unsigned 
 
     DEBUG_OUT("sending object %s \n", obj_desc_sprint(&odsc));
 
-    hret = margo_bulk_create(client->mid, 1, (void **)&data, &rdma_size,
-                             HG_BULK_READ_ONLY, &in.handle);
+    struct cudaPointerAttributes ptr_attr;
+    CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, data));
+    struct hg_bulk_attr bulk_attr = {.mem_type = HG_MEM_TYPE_CUDA,
+                                     .device = ptr_attr.device };
+
+    hret = margo_bulk_create_attr(client->mid, 1, (void **)&data, &rdma_size,
+                                  HG_BULK_READ_ONLY, &bulk_attr, &in.handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
         return dspaces_ERR_MERCURY;
@@ -1638,12 +1643,18 @@ static int cuda_put_hybrid(dspaces_client_t client, const char *var_name, unsign
     in.odsc.raw_gdim = (char *)(&odsc_gdim);
     hg_size_t hg_rdma_size = rdma_size;
 
+    struct cudaPointerAttributes ptr_attr;
+    struct hg_bulk_attr bulk_attr;
+
     if(rdma_size >= threshold) {
         hret = margo_bulk_create(client->mid, 1, (void **)&h_buffer, &hg_rdma_size,
                                     HG_BULK_READ_ONLY, &in.handle);
     } else {
-        hret = margo_bulk_create(client->mid, 1, (void **)&data, &hg_rdma_size,
-                                    HG_BULK_READ_ONLY, &in.handle);
+        CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, data));
+        bulk_attr = (struct hg_bulk_attr) {.mem_type = HG_MEM_TYPE_CUDA,
+                                           .device = ptr_attr.device };
+        hret = margo_bulk_create_attr(client->mid, 1, (void **)&data, &hg_rdma_size,
+                                    HG_BULK_READ_ONLY, &bulk_attr, &in.handle);
     }
 
     if(hret != HG_SUCCESS) {
@@ -1713,10 +1724,7 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
                 const void *data)
 {
     int ret = dspaces_SUCCESS;
-    int data_dev_rank;
-    struct cudaPointerAttributes ptr_attr;
-    CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, data));
-    data_dev_rank = ptr_attr.device;
+
     switch (client->cuda_info.cuda_put_mode)
     {
     case 0:
