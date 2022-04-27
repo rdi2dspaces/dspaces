@@ -2114,6 +2114,12 @@ static int get_data_gdr(dspaces_client_t client, int num_odscs,
     hndl = (hg_handle_t *)malloc(sizeof(hg_handle_t) * num_odscs);
     serv_req = (margo_request *)malloc(sizeof(margo_request) * num_odscs);
 
+    struct hg_bulk_attr *bulk_attr;
+    bulk_attr = (struct hg_bulk_attr*) malloc(sizeof(struct hg_bulk_attr) * num_odscs);
+
+    struct cudaPointerAttributes ptr_attr;
+    CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, d_data));
+
     for(int i = 0; i < num_odscs; ++i) {
         od[i] = obj_data_alloc_cuda(&odsc_tab[i]);
         in[i].odsc.size = sizeof(obj_descriptor);
@@ -2121,8 +2127,11 @@ static int get_data_gdr(dspaces_client_t client, int num_odscs,
 
         hg_size_t rdma_size = (req_obj.size) * bbox_volume(&odsc_tab[i].bb);
 
-        margo_bulk_create(client->mid, 1, (void **)(&(od[i]->data)), &rdma_size,
-                          HG_BULK_WRITE_ONLY, &in[i].handle);
+        bulk_attr[i] = (struct hg_bulk_attr) {.mem_type = HG_MEM_TYPE_CUDA,
+                                                .device = ptr_attr.device};
+        margo_bulk_create_attr(client->mid, 1, (void **)(&(od[i]->data)),
+                            &rdma_size, HG_BULK_WRITE_ONLY, &bulk_attr[i],
+                            &in[i].handle);
 
         hg_addr_t server_addr;
         margo_addr_lookup(client->mid, odsc_tab[i].owner, &server_addr);
@@ -2160,6 +2169,7 @@ static int get_data_gdr(dspaces_client_t client, int num_odscs,
         timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
         obj_data_free_cuda(od[i]);
     }
+    free(bulk_attr);
     free(hndl);
     free(serv_req);
     free(in);
