@@ -2087,6 +2087,7 @@ static int get_data_baseline(dspaces_client_t client, int num_odscs,
         bulk_out_t resp;
         margo_get_output(hndl[i], &resp);
         margo_free_output(hndl[i], &resp);
+        margo_bulk_free(in[i].handle);
         margo_destroy(hndl[i]);
         // copy received data into user return buffer
         gettimeofday(&start, NULL);
@@ -2169,6 +2170,7 @@ static int get_data_gdr(dspaces_client_t client, int num_odscs,
         bulk_out_t resp;
         margo_get_output(hndl[i], &resp);
         margo_free_output(hndl[i], &resp);
+        margo_bulk_free(in[i].handle);
         margo_destroy(hndl[i]);
         // copy received data into user return buffer
         gettimeofday(&start, NULL);
