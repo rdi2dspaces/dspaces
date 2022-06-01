@@ -492,7 +492,7 @@ static int check_gdrcopy_support_dev(dspaces_client_t client, int dev_rank)
     // Starting from CUDA 11.3, CUDA provides an ability to check GPUDirect RDMA support.
     if(drv_version >= 11030) {
         CUdevice dev;
-        CUDA_ASSERTDRV(cuDeviceGet(&dev, data_dev_rank));
+        CUDA_ASSERTDRV(cuDeviceGet(&dev, dev_rank));
         CUDA_ASSERTDRV(cuDeviceGetAttribute(&gdr_support, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED, dev));
         CUDA_ASSERTRT(cudaSetDevice(cur_dev_rank));
         return gdr_support;
