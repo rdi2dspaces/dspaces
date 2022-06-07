@@ -84,6 +84,9 @@
 
 #define CUDA_MEM_ALIGN(x, n)     (((x) + ((n) - 1)) & ~((n) - 1))
 
+#define CUDA_MAX_CONCURRENT_KERNELS 128
+#define DSPACES_CUDA_DEFAULT_CONCURRENT_KERNELS 32
+
 // static int g_is_initialized = 0;
 
 static enum storage_type st = column_major;
@@ -116,6 +119,8 @@ struct dspaces_cuda_info {
     int cuda_put_mode;
     int cuda_get_mode;
     int dev_num;
+    int concurrency_enabled;
+    int num_concurrent_kernels;
     struct dspaces_cuda_dev_info *dev_list;
 #ifdef HAVE_GDRCOPY
     gdr_t gdrcopy_handle;
@@ -596,6 +601,27 @@ static inline void gdrcopy_fini(dspaces_client_t client)
 static int dspaces_init_gpu(dspaces_client_t client)
 {
     int ret = dspaces_SUCCESS;
+
+    const char* envcudaconcurrent = getenv("DSPACES_CUDA_ENABLE_CONCURRENCY");
+    const char* envcudaconcurrentkernels = getenv("DSPACES_CUDA_NUM_CONCURRENT_KERNELS");
+
+    if(envcudaconcurrent) {
+        client->cuda_info.concurrency_enabled = 1;
+    } else {
+        client->cuda_info.concurrency_enabled = 0;
+    }
+
+    // TODO: set the concurrent kernel nums according to different devices
+    if(envcudaconcurrentkernels) {
+        int concurrent_kernels = atoi(envcudaconcurrentkernels);
+        if(concurrent_kernels < CUDA_MAX_CONCURRENT_KERNELS) {
+            client->cuda_info.num_concurrent_kernels = concurrent_kernels;
+        } else {
+            client->cuda_info.num_concurrent_kernels = DSPACES_CUDA_DEFAULT_CONCURRENT_KERNELS;
+        }
+    } else {
+        client->cuda_info.num_concurrent_kernels = DSPACES_CUDA_DEFAULT_CONCURRENT_KERNELS;
+    }
 
     const char *envcudaputmode = getenv("DSPACES_CUDA_PUT_MODE");
     const char *envcudagetmode = getenv("DSPACES_CUDA_GET_MODE");
@@ -2165,6 +2191,22 @@ static int get_data_gdr(dspaces_client_t client, int num_odscs,
     // return_od is linked to the device ptr
     struct obj_data *return_od = obj_data_alloc_no_data(&req_obj, d_data);
 
+    // concurrent cuda streams assigned to each od
+    cudaStream_t* stream;
+    int stream_size;
+    if(client->cuda_info.concurrency_enabled) {
+        if(num_odscs < client->cuda_info.num_concurrent_kernels) {
+            stream_size = num_odscs;
+        } else {
+            stream_size = client->cuda_info.num_concurrent_kernels;
+        }
+
+        stream = (cudaStream_t*) malloc(stream_size*sizeof(cudaStream_t));
+        for(int i = 0; i < stream_size; i++) {
+            CUDA_ASSERTRT(cudaStreamCreateWithFlags(&stream[i], cudaStreamNonBlocking));
+        }
+    }
+
     for(int i = 0; i < num_odscs; ++i) {
         margo_wait(serv_req[i]);
         bulk_out_t resp;
@@ -2173,11 +2215,27 @@ static int get_data_gdr(dspaces_client_t client, int num_odscs,
         margo_bulk_free(in[i].handle);
         margo_destroy(hndl[i]);
         // copy received data into user return buffer
+        if(client->cuda_info.concurrency_enabled) {
+            gettimeofday(&start, NULL);
+            ret = ssd_copy_cuda_async(return_od, od[i], &stream[i%stream_size]);
+            gettimeofday(&end, NULL);
+        } else {
+            gettimeofday(&start, NULL);
+            ret = ssd_copy_cuda(return_od, od[i]);
+            gettimeofday(&end, NULL);
+            obj_data_free_cuda(od[i]);
+        }
+        timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;  
+    }
+
+    if(client->cuda_info.concurrency_enabled) {
         gettimeofday(&start, NULL);
-        ret = ssd_copy_cuda(return_od, od[i]);
+        for(int i = 0; i < stream_size; i++) {
+            CUDA_ASSERTRT(cudaStreamSynchronize(stream[i]));
+            obj_data_free_cuda(od[i]);
+        }
         gettimeofday(&end, NULL);
         timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
-        obj_data_free_cuda(od[i]);
     }
     free(bulk_attr);
     free(hndl);

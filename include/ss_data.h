@@ -21,6 +21,9 @@
 
 #include <abt.h>
 
+#include <cuda.h>
+#include <cuda_runtime_api.h>
+
 #define MAX_VERSIONS 10
 
 #define DS_CLIENT_STORAGE 0x01
@@ -326,6 +329,7 @@ void matrix_init(struct matrix *, enum storage_type, struct bbox *, struct bbox 
 
 int ssd_copy(struct obj_data *, struct obj_data *);
 int ssd_copy_cuda(struct obj_data *, struct obj_data *);
+int ssd_copy_cuda_async(struct obj_data *, struct obj_data *, cudaStream_t *stream);
 //
 long ssh_hash_elem_count(struct sspace *ss, const struct bbox *bb);
 //
