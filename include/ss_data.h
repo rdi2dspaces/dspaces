@@ -83,6 +83,14 @@ struct obj_data {
     unsigned int f_free : 1;
 };
 
+struct dc_request {
+    struct list_head list_entry;
+    struct obj_data* od;
+    margo_request gdr_req, host_req;
+    hg_bulk_t* bulk_handle;
+    int f_error;
+};
+
 /*
   A view in  the matrix allows to extract any subset  of values from a
   matrix.
@@ -302,6 +310,9 @@ static inline hg_return_t hg_proc_odsc_hdr_with_gdim(hg_proc_t proc, void *arg)
 }
 
 MERCURY_GEN_PROC(bulk_gdim_t, ((odsc_hdr_with_gdim)(odsc))((hg_bulk_t)(handle)))
+MERCURY_GEN_PROC(dc_bulk_gdim_t, ((odsc_hdr_with_gdim)(odsc))((int32_t)(channel))
+                                    ((size_t)(offset))((size_t)(rdma_size))
+                                    ((hg_bulk_t)(handle)))
 MERCURY_GEN_PROC(bulk_in_t, ((odsc_hdr)(odsc))((hg_bulk_t)(handle)))
 MERCURY_GEN_PROC(bulk_out_t, ((int32_t)(ret)))
 MERCURY_GEN_PROC(put_meta_in_t, ((hg_string_t)(name))((int32_t)(length))(
@@ -398,5 +409,7 @@ struct lock_data *get_lock(struct list_head *list, char *name);
 struct lock_data *create_lock(struct list_head *list, char *name);
 
 char **addr_str_buf_to_list(char *buf, int num_addrs);
+
+struct dc_request *dc_req_find(struct list_head *dc_req_list, obj_descriptor *odsc);
 
 #endif /* __SS_DATA_H_ */

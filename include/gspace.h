@@ -56,6 +56,9 @@ struct ds_gspace {
     /* Pending object descriptors for draining. */
     struct list_head obj_desc_drain_list;
 
+    /* Pending requests for dual channel put. */
+    struct list_head dc_req_list;
+
     int rank;
     int size_sp;
     char **server_address;
