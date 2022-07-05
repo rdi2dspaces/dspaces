@@ -153,6 +153,7 @@ struct dspaces_client {
     hg_id_t kill_client_id;
     hg_id_t sub_id;
     hg_id_t notify_id;
+    hg_id_t put_dc_id;
     struct dc_gspace *dcg;
     char **server_address;
     char **node_names;
@@ -813,6 +814,7 @@ static int dspaces_init_margo(dspaces_client_t client,
         DS_HG_REGISTER(hg, client->notify_id, odsc_list_t, void, notify_rpc);
         margo_registered_name(client->mid, "query_meta_rpc",
                               &client->query_meta_id, &flag);
+        margo_registered_name(client->mid, "put_dc_rpc", &client->put_dc_id, &flag);
     } else {
         client->put_id = MARGO_REGISTER(client->mid, "put_rpc", bulk_gdim_t,
                                         bulk_out_t, NULL);
@@ -860,6 +862,8 @@ static int dspaces_init_margo(dspaces_client_t client,
                             NULL);
         margo_registered_disable_response(client->mid, client->notify_id,
                                           HG_TRUE);
+        client->put_dc_id = MARGO_REGISTER(client->mid, "put_dc_rpc", dc_bulk_gdim_t,
+                                        bulk_out_t, NULL);
     }
 
     return (dspaces_SUCCESS);
@@ -1755,7 +1759,7 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
     hg_addr_t server_addr;
     hg_handle_t gdr_handle, host_handle;
     hg_return_t hret;
-    bulk_gdim_t gdr_in, host_in;
+    dc_bulk_gdim_t gdr_in, host_in;
     bulk_out_t gdr_out, host_out;
     int ret = dspaces_SUCCESS;
 
@@ -1809,6 +1813,9 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
     gdr_in.odsc.raw_odsc = (char *)(&odsc);
     gdr_in.odsc.gdim_size = sizeof(struct global_dimension);
     gdr_in.odsc.raw_gdim = (char *)(&odsc_gdim);
+    gdr_in.channel = 0; /* gdr - 0 */
+    gdr_in.offset = 0;
+    gdr_in.rdma_size = gdr_rdma_size;
 
     get_server_address(client, &server_addr);
     margo_request *req, *gdr_req, *host_req;
@@ -1824,7 +1831,7 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
     struct hg_bulk_attr bulk_attr = {.mem_type = HG_MEM_TYPE_CUDA,
                                         .device = ptr_attr.device };
 
-    hret = margo_bulk_create_attr(client->mid, 1, (void **)&data, &hg_rdma_size,
+    hret = margo_bulk_create_attr(client->mid, 1, (void **)&data, &hg_gdr_rdma_size,
                                 HG_BULK_READ_ONLY, &bulk_attr, &gdr_in.handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_bulk_create_attr() failed\n", __func__);
@@ -1835,7 +1842,7 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
     }
 
     // TODO: new rpc
-    hret = margo_create(client->mid, server_addr, client->put_id, &gdr_handle);
+    hret = margo_create(client->mid, server_addr, client->put_dc_id, &gdr_handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
         free(req);
@@ -1873,7 +1880,7 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
         return dspaces_ERR_MERCURY;
     }
 
-    hret = margo_create(client->mid, server_addr, client->put_id, &host_handle);
+    hret = margo_create(client->mid, server_addr, client->put_dc_id, &host_handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
         free(req);

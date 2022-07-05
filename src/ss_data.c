@@ -1880,12 +1880,12 @@ char **addr_str_buf_to_list(char *buf, int num_addrs)
 
 struct dc_request *dc_req_alloc(struct obj_data *od)
 {
-    struct dc_requst *dc_req = (struct dc_requst*) malloc(sizeof(struct dc_requst));
+    struct dc_request *dc_req = (struct dc_request*) malloc(sizeof(struct dc_request));
     if(!dc_req) {
         fprintf(stderr, "Malloc dc_req error\n");
         return NULL;
     }
-    memset(dc_req, 0, sizeof(struct dc_requst));
+    memset(dc_req, 0, sizeof(struct dc_request));
 
     dc_req->od = od;
     dc_req->f_error = 0;
@@ -1897,7 +1897,7 @@ struct dc_request *dc_req_find(struct list_head *dc_req_list, obj_descriptor *od
         return NULL;
     }
     struct dc_request *e;
-    list_for_each_entry(e, dc_req_list, struct dc_req, entry)
+    list_for_each_entry(e, dc_req_list, struct dc_request, entry)
     {
         if(obj_desc_equals_no_owner(odsc, &e->od->obj_desc))
             return e;

@@ -64,6 +64,7 @@ struct dspaces_provider {
     hg_id_t kill_client_id;
     hg_id_t sub_id;
     hg_id_t notify_id;
+    hg_id_t put_dc_id;
     struct ds_gspace *dsg;
     char **server_address;
     char **node_names;
@@ -103,6 +104,7 @@ DECLARE_MARGO_RPC_HANDLER(odsc_internal_rpc)
 DECLARE_MARGO_RPC_HANDLER(ss_rpc)
 DECLARE_MARGO_RPC_HANDLER(kill_rpc)
 DECLARE_MARGO_RPC_HANDLER(sub_rpc)
+DECLARE_MARGO_RPC_HANDLER(put_dc_rpc)
 
 static void put_rpc(hg_handle_t h);
 static void put_local_rpc(hg_handle_t h);
@@ -115,6 +117,7 @@ static void odsc_internal_rpc(hg_handle_t h);
 static void ss_rpc(hg_handle_t h);
 static void kill_rpc(hg_handle_t h);
 static void sub_rpc(hg_handle_t h);
+static void put_dc_rpc(hg_handle_t h);
 // static void write_lock_rpc(hg_handle_t h);
 // static void read_lock_rpc(hg_handle_t h);
 
@@ -954,6 +957,8 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
         DS_HG_REGISTER(hg, server->sub_id, odsc_gdim_t, void, sub_rpc);
         margo_registered_name(server->mid, "notify_rpc", &server->notify_id,
                               &flag);
+        margo_registered_name(server->mid, "put_dc_rpc", &server->put_dc_id, &flag);
+        DS_HG_REGISTER(hg, server->put_dc_id, dc_bulk_gdim_t, bulk_out_t, put_dc_rpc);
     } else {
         server->put_id = MARGO_REGISTER(server->mid, "put_rpc", bulk_gdim_t,
                                         bulk_out_t, put_rpc);
@@ -1016,6 +1021,9 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
             MARGO_REGISTER(server->mid, "notify_rpc", odsc_list_t, void, NULL);
         margo_registered_disable_response(server->mid, server->notify_id,
                                           HG_TRUE);
+        server->put_dc_id = MARGO_REGISTER(server->mid, "put_dc_rpc", dc_bulk_gdim_t,
+                                        bulk_out_t, put_dc_rpc);
+        margo_register_data(server->mid, server->put_dc_id, (void *)server, NULL);
     }
     int err = dsg_alloc(server, conf_file, comm);
     if(err) {
@@ -1234,7 +1242,7 @@ DEFINE_MARGO_RPC_HANDLER(put_rpc)
 static void put_dc_rpc(hg_handle_t handle)
 {
     hg_return_t hret;
-    bulk_gdim_t in;
+    dc_bulk_gdim_t in;
     bulk_out_t out;
     hg_bulk_t bulk_handle;
 
@@ -1275,7 +1283,7 @@ static void put_dc_rpc(hg_handle_t handle)
     struct obj_data *od;
     // check if there is an dual channel request in the list; if not, create one as the place holder
     ABT_mutex_lock(server->dc_mutex);
-    dc_req = dc_req_find(server->dsg->dc_req_list, &in_odsc);
+    dc_req = dc_req_find(&server->dsg->dc_req_list, &in_odsc);
     if(dc_req == NULL) {
         od = obj_data_alloc(&in_odsc);
         if(!od) {
@@ -1286,17 +1294,21 @@ static void put_dc_rpc(hg_handle_t handle)
         if(!dc_req) {
             fprintf(stderr, "ERROR: (%s): dc_req allocation failed!\n", __func__);
         }
-        list_add(&dc_req->list_entry, server->dsg->dc_req_list);
+        list_add(&dc_req->entry, &server->dsg->dc_req_list);
         f_first_channel = 1;
     } 
     ABT_mutex_unlock(server->dc_mutex);
 
     if(dc_req->f_error && !f_first_channel) {
+        fprintf(stderr, "ERROR: (%s): 1 of 2 channel failed!\n", __func__);
+        out.ret = dspaces_ERR_MERCURY;
         obj_data_free(dc_req->od);
-        ABT_mutex_lock(server->dc_mutex);
-        list_del(&dc_req->list_entry);
-        ABT_mutex_unlock(server->dc_mutex);
+        list_del(&dc_req->entry);
         free(dc_req);
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_destroy(handle);
+        return;
     }
 
     // do write lock
@@ -1313,10 +1325,7 @@ static void put_dc_rpc(hg_handle_t handle)
             fprintf(stderr, "ERROR: (%s): margo_bulk_create failed!\n", __func__);
             out.ret = dspaces_ERR_MERCURY;
             obj_data_free(dc_req->od);
-            ABT_mutex_lock(server->dc_mutex);
-            list_del(&dc_req->list_entry);
-            ABT_mutex_unlock(server->dc_mutex);
-            free(dc_req);
+            dc_req->f_error = 1;
             margo_respond(handle, &out);
             margo_free_input(handle, &in);
             margo_destroy(handle);
@@ -1324,14 +1333,18 @@ static void put_dc_rpc(hg_handle_t handle)
         }
     }
 
-    // TODO: change transfer() to itransfer()
-
-    hret = margo_bulk_transfer(mid, HG_BULK_PULL, info->addr, in.handle, 0,
-                               bulk_handle, 0, size);
-    if(hret != HG_SUCCESS) {
-        fprintf(stderr, "ERROR: (%s): margo_bulk_transfer failed!\n", __func__);
+    margo_request *bulk_req;
+    if(in.channel == 0) {
+        /* gdr */
+        bulk_req = &dc_req->gdr_req;
+    } else if(in.channel == 1) {
+        /* host */
+        bulk_req = &dc_req->host_req;
+    } else {
+        /* error */
+        fprintf(stderr, "ERROR: (%s): invalid in.channel!\n", __func__);
         out.ret = dspaces_ERR_MERCURY;
-        // TODO: handle od list and od free
+        dc_req->f_error = 1;
         margo_respond(handle, &out);
         margo_free_input(handle, &in);
         margo_bulk_free(bulk_handle);
@@ -1339,11 +1352,71 @@ static void put_dc_rpc(hg_handle_t handle)
         return;
     }
 
-    ABT_mutex_lock(server->ls_mutex);
-    ls_add_obj(server->dsg->ls, od);
-    ABT_mutex_unlock(server->ls_mutex);
+    hret = margo_bulk_itransfer(mid, HG_BULK_PULL, info->addr, in.handle, 0,
+                               bulk_handle, offset, rdma_size, bulk_req);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_bulk_transfer failed!\n", __func__);
+        out.ret = dspaces_ERR_MERCURY;
+        obj_data_free(dc_req->od);
+        dc_req->f_error = 1;
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_bulk_free(bulk_handle);
+        margo_destroy(handle);
+        return;
+    }
 
-    DEBUG_OUT("Received obj %s\n", obj_desc_sprint(&od->obj_desc));
+    if(!f_first_channel) {
+        hret = margo_wait(dc_req->gdr_req);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): margo_wait gdr_req failed!\n", __func__);
+            out.ret = dspaces_ERR_MERCURY;
+            obj_data_free(dc_req->od);
+            list_del(&dc_req->entry);
+            free(dc_req);
+            margo_respond(handle, &out);
+            margo_free_input(handle, &in);
+            margo_bulk_free(bulk_handle);
+            margo_destroy(handle);
+            return;
+        }
+        hret = margo_wait(dc_req->host_req);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): margo_wait host_req failed!\n", __func__);
+            out.ret = dspaces_ERR_MERCURY;
+            obj_data_free(dc_req->od);
+            list_del(&dc_req->entry);
+            free(dc_req);
+            margo_respond(handle, &out);
+            margo_free_input(handle, &in);
+            margo_bulk_free(bulk_handle);
+            margo_destroy(handle);
+            return;
+        }
+
+        // final error check
+        if(dc_req->f_error) {
+            fprintf(stderr, "ERROR: (%s): 1 of 2 channel failed!\n", __func__);
+            out.ret = dspaces_ERR_MERCURY;
+            obj_data_free(dc_req->od);
+            list_del(&dc_req->entry);
+            free(dc_req);
+            margo_respond(handle, &out);
+            margo_free_input(handle, &in);
+            margo_bulk_free(bulk_handle);
+            margo_destroy(handle);
+            return;
+        } else {
+            ABT_mutex_lock(server->ls_mutex);
+            ls_add_obj(server->dsg->ls, od);
+            ABT_mutex_unlock(server->ls_mutex);
+            DEBUG_OUT("Received obj %s\n, 2 channel succeed!", obj_desc_sprint(&od->obj_desc));
+            // dual channel finished, rm the dc entry
+            list_del(&dc_req->entry);
+            free(dc_req);
+        }
+
+    }
 
     // now update the dht
     out.ret = dspaces_SUCCESS;
@@ -1352,8 +1425,10 @@ static void put_dc_rpc(hg_handle_t handle)
     margo_free_input(handle, &in);
     margo_destroy(handle);
 
-    obj_update_dht(server, od, DS_OBJ_NEW);
-    DEBUG_OUT("Finished obj_put_update from put_rpc\n");
+    if(!f_first_channel) {
+        obj_update_dht(server, od, DS_OBJ_NEW);
+        DEBUG_OUT("Finished obj_put_update from put_rpc\n");
+    }
 }
 DEFINE_MARGO_RPC_HANDLER(put_dc_rpc)
 
