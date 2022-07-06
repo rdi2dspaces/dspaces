@@ -1782,8 +1782,8 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
 
     // preset data volume for gdr / pipeline = 50% : 50%
     // cut the data byte stream and record the offset
-    double gdr_ratio = 0.5;
-    double host_ratio = 1 - gdr_ratio;
+    static double gdr_ratio = 0.5;
+    static double host_ratio = 0.5;
 
     size_t offset = (size_t) (gdr_ratio * data_size);
     size_t gdr_rdma_size = offset;
@@ -1841,7 +1841,6 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
         return dspaces_ERR_MERCURY;
     }
 
-    // TODO: new rpc
     hret = margo_create(client->mid, server_addr, client->put_dc_id, &gdr_handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
@@ -1986,6 +1985,21 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
             }
         }
     } while (req_idx != 2); // margo_wait_any will set idx to count when all reqs are finished
+
+    double epsilon = 1e-3; // 1us
+    double lr = 0.1;
+    // adjust data cutting ratio
+    if(gdr_timer < host_timer) {
+        if(host_timer - gdr_timer < epsilon) {
+            gdr_ratio += ((host_timer - gdr_timer) / host_timer) * lr;
+            host_ratio = 1 - gdr_ratio;
+        }
+    } else {
+        if(gdr_timer - host_timer < epsilon) {
+            gdr_ratio -= ((gdr_timer - host_timer) / gdr_timer) * lr;
+            host_ratio = 1 - gdr_ratio;
+        }
+    }
 
     if(gdr_out.ret == 0 && host_out.ret == 0) {
         ret = dspaces_SUCCESS;
