@@ -1870,6 +1870,9 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
     host_in.odsc.raw_odsc = (char *)(&odsc);
     host_in.odsc.gdim_size = sizeof(struct global_dimension);
     host_in.odsc.raw_gdim = (char *)(&odsc_gdim);
+    host_in.channel = 1; /* host - 1 */
+    host_in.offset = offset;
+    host_in.rdma_size = host_rdma_size;
 
     hret = margo_bulk_create(client->mid, 1, (void **)&h_buffer, &hg_host_rdma_size,
                                     HG_BULK_READ_ONLY, &host_in.handle);
