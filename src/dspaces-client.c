@@ -1795,6 +1795,9 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
 
     size_t data_size = (elem_size)*bbox_volume(&odsc.bb);
 
+    DEBUG_OUT("ts = %u gdr_ratio = %lf, host_ratio = %lf\n",
+                ver, client->cuda_info.dc_gdr_ratio, client->cuda_info.dc_host_ratio);
+
     size_t offset = (size_t) (client->cuda_info.dc_gdr_ratio * data_size);
     size_t gdr_rdma_size = offset;
     size_t host_rdma_size = data_size - gdr_rdma_size;
@@ -2003,6 +2006,7 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
         }
     } while (req_idx != 2); // margo_wait_any will set idx to count when all reqs are finished
 
+    DEBUG_OUT("ts = %u, gdr_time = %lf, host_time = %lf\n", ver, gdr_timer, host_timer);
     // adjust data cutting ratio
     if(gdr_timer < host_timer) {
         if(host_timer - gdr_timer < client->cuda_info.dc_epsilon) {
