@@ -1313,24 +1313,23 @@ static void put_dc_rpc(hg_handle_t handle)
 
     // do write lock
 
-    hg_size_t bulk_size = (in_odsc.size) * bbox_volume(&(in_odsc.bb));
+    //hg_size_t bulk_size = (in_odsc.size) * bbox_volume(&(in_odsc.bb));
     size_t rdma_size = in.rdma_size;
     size_t offset = in.offset;
+    void *data_ptr = od->data + offset;
 
-    if(f_first_channel) {
-        hret = margo_bulk_create(mid, 1, (void **)&(od->data), &bulk_size,
-                                 HG_BULK_WRITE_ONLY, &bulk_handle);
+    hret = margo_bulk_create(mid, 1, (void **)&(data_ptr), &rdma_size,
+                                HG_BULK_WRITE_ONLY, &bulk_handle);
 
-        if(hret != HG_SUCCESS) {
-            fprintf(stderr, "ERROR: (%s): margo_bulk_create failed!\n", __func__);
-            out.ret = dspaces_ERR_MERCURY;
-            obj_data_free(dc_req->od);
-            dc_req->f_error = 1;
-            margo_respond(handle, &out);
-            margo_free_input(handle, &in);
-            margo_destroy(handle);
-            return;
-        }
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_bulk_create failed!\n", __func__);
+        out.ret = dspaces_ERR_MERCURY;
+        obj_data_free(dc_req->od);
+        dc_req->f_error = 1;
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_destroy(handle);
+        return;
     }
 
     margo_request *bulk_req;
@@ -1353,7 +1352,7 @@ static void put_dc_rpc(hg_handle_t handle)
     }
 
     hret = margo_bulk_itransfer(mid, HG_BULK_PULL, info->addr, in.handle, 0,
-                               bulk_handle, offset, rdma_size, bulk_req);
+                               bulk_handle, 0, rdma_size, bulk_req);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_bulk_transfer failed!\n", __func__);
         out.ret = dspaces_ERR_MERCURY;
