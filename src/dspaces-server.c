@@ -1296,6 +1296,8 @@ static void put_dc_rpc(hg_handle_t handle)
         }
         list_add(&dc_req->entry, &server->dsg->dc_req_list);
         f_first_channel = 1;
+    } else {
+        od = dc_req->od;
     } 
     ABT_mutex_unlock(server->dc_mutex);
 
@@ -1366,31 +1368,17 @@ static void put_dc_rpc(hg_handle_t handle)
     }
 
     if(!f_first_channel) {
+        // TODO: rewrite with margo_wait_any(), have to re write dc_request
         hret = margo_wait(dc_req->gdr_req);
         if(hret != HG_SUCCESS) {
             fprintf(stderr, "ERROR: (%s): margo_wait gdr_req failed!\n", __func__);
-            out.ret = dspaces_ERR_MERCURY;
-            obj_data_free(dc_req->od);
-            list_del(&dc_req->entry);
-            free(dc_req);
-            margo_respond(handle, &out);
-            margo_free_input(handle, &in);
-            margo_bulk_free(bulk_handle);
-            margo_destroy(handle);
-            return;
+            dc_req->f_error = 1;
         }
         hret = margo_wait(dc_req->host_req);
         if(hret != HG_SUCCESS) {
             fprintf(stderr, "ERROR: (%s): margo_wait host_req failed!\n", __func__);
             out.ret = dspaces_ERR_MERCURY;
-            obj_data_free(dc_req->od);
-            list_del(&dc_req->entry);
-            free(dc_req);
-            margo_respond(handle, &out);
-            margo_free_input(handle, &in);
-            margo_bulk_free(bulk_handle);
-            margo_destroy(handle);
-            return;
+            dc_req->f_error = 1;
         }
 
         // final error check

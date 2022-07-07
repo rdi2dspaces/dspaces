@@ -1932,6 +1932,7 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
     {
         gettimeofday(&start, NULL);
         hret = margo_wait_any(2, req, &req_idx);
+        req[req_idx] = MARGO_REQUEST_NULL;
         gettimeofday(&end, NULL);
         if(hret != HG_SUCCESS) {
             fprintf(stderr, "ERROR: (%s): margo_wait_any() failed, idx = %zu\n", __func__, req_idx);
@@ -1977,7 +1978,10 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
                     return dspaces_ERR_MERCURY;
                 }
                 break;
-            
+
+            case 2: // finished
+                break;
+                
             default:
                 fprintf(stderr, "ERROR: (%s): margo_wait_any() failed, idx = %zu\n", __func__, req_idx);
                 free(req);
