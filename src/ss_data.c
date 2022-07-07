@@ -1886,6 +1886,8 @@ struct dc_request *dc_req_alloc(struct obj_data *od)
         return NULL;
     }
     memset(dc_req, 0, sizeof(struct dc_request));
+    
+    dc_req->margo_req = (margo_request *) malloc(2*sizeof(margo_request));
 
     dc_req->od = od;
     dc_req->f_error = 0;
@@ -1904,4 +1906,10 @@ struct dc_request *dc_req_find(struct list_head *dc_req_list, obj_descriptor *od
     }
 
     return NULL;
+}
+
+void dc_req_free(struct dc_request *dc_req)
+{
+    free(dc_req->margo_req);
+    free(dc_req);
 }

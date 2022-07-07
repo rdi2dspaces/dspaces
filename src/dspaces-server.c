@@ -1306,7 +1306,7 @@ static void put_dc_rpc(hg_handle_t handle)
         out.ret = dspaces_ERR_MERCURY;
         obj_data_free(dc_req->od);
         list_del(&dc_req->entry);
-        free(dc_req);
+        dc_req_free(dc_req);
         margo_respond(handle, &out);
         margo_free_input(handle, &in);
         margo_destroy(handle);
@@ -1337,10 +1337,10 @@ static void put_dc_rpc(hg_handle_t handle)
     margo_request *bulk_req;
     if(in.channel == 0) {
         /* gdr */
-        bulk_req = &dc_req->gdr_req;
+        bulk_req = &dc_req->margo_req[0];
     } else if(in.channel == 1) {
         /* host */
-        bulk_req = &dc_req->host_req;
+        bulk_req = &dc_req->margo_req[1];
     } else {
         /* error */
         fprintf(stderr, "ERROR: (%s): invalid in.channel!\n", __func__);
@@ -1367,19 +1367,24 @@ static void put_dc_rpc(hg_handle_t handle)
         return;
     }
 
+    size_t req_idx;
     if(!f_first_channel) {
-        // TODO: rewrite with margo_wait_any(), have to re write dc_request
-        hret = margo_wait(dc_req->gdr_req);
-        if(hret != HG_SUCCESS) {
-            fprintf(stderr, "ERROR: (%s): margo_wait gdr_req failed!\n", __func__);
-            dc_req->f_error = 1;
-        }
-        hret = margo_wait(dc_req->host_req);
-        if(hret != HG_SUCCESS) {
-            fprintf(stderr, "ERROR: (%s): margo_wait host_req failed!\n", __func__);
-            out.ret = dspaces_ERR_MERCURY;
-            dc_req->f_error = 1;
-        }
+        do {
+            hret = margo_wait_any(2, dc_req->margo_req, &req_idx);
+            if(req_idx < 2) {
+                dc_req->margo_req[req_idx] = MARGO_REQUEST_NULL;
+            }
+            if(hret != HG_SUCCESS) {
+                if(req_idx == 0) {
+                    fprintf(stderr, "ERROR: (%s): margo_wait gdr_req failed!\n", __func__);
+                } else if(req_idx == 1) {
+                    fprintf(stderr, "ERROR: (%s): margo_wait host_req failed!\n", __func__);
+                } else {
+                    fprintf(stderr, "ERROR: (%s): margo_wait failed!\n", __func__);
+                }
+                dc_req->f_error = 1;
+            }
+        } while (req_idx != 2);
 
         // final error check
         if(dc_req->f_error) {
@@ -1387,7 +1392,7 @@ static void put_dc_rpc(hg_handle_t handle)
             out.ret = dspaces_ERR_MERCURY;
             obj_data_free(dc_req->od);
             list_del(&dc_req->entry);
-            free(dc_req);
+            dc_req_free(dc_req);
             margo_respond(handle, &out);
             margo_free_input(handle, &in);
             margo_bulk_free(bulk_handle);
@@ -1400,7 +1405,7 @@ static void put_dc_rpc(hg_handle_t handle)
             DEBUG_OUT("Received obj %s\n, 2 channel succeed!", obj_desc_sprint(&od->obj_desc));
             // dual channel finished, rm the dc entry
             list_del(&dc_req->entry);
-            free(dc_req);
+            dc_req_free(dc_req);
         }
 
     }

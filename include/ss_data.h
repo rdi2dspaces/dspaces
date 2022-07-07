@@ -86,8 +86,8 @@ struct obj_data {
 struct dc_request {
     struct list_head entry;
     struct obj_data* od;
-    margo_request gdr_req;
-    margo_request host_req;
+    /* margo request for bulk_itransfer(); 0 - gdr; 1 - host */
+    margo_request * margo_req;
     hg_bulk_t* bulk_handle;
     int f_error;
 };
@@ -413,5 +413,6 @@ char **addr_str_buf_to_list(char *buf, int num_addrs);
 
 struct dc_request *dc_req_alloc(struct obj_data *od);
 struct dc_request *dc_req_find(struct list_head *dc_req_list, obj_descriptor *odsc);
+void dc_req_free(struct dc_request *dc_req);
 
 #endif /* __SS_DATA_H_ */
