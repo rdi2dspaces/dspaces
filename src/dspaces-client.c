@@ -125,6 +125,10 @@ struct dspaces_cuda_info {
 #ifdef HAVE_GDRCOPY
     gdr_t gdrcopy_handle;
 #endif
+    double dc_gdr_ratio;
+    double dc_host_ratio;
+    double dc_learning_rate;
+    double dc_epsilon;
 };
 
 
@@ -623,6 +627,13 @@ static int dspaces_init_gpu(dspaces_client_t client)
     } else {
         client->cuda_info.num_concurrent_kernels = DSPACES_CUDA_DEFAULT_CONCURRENT_KERNELS;
     }
+
+    // preset data volume for gdr / pipeline = 50% : 50%
+    // cut the data byte stream and record the offset
+    client->cuda_info.dc_gdr_ratio = 0.5;
+    client->cuda_info.dc_host_ratio = 0.5;
+    client->cuda_info.dc_learning_rate = 0.1;
+    client->cuda_info.dc_epsilon = 1e-3; // 1us
 
     const char *envcudaputmode = getenv("DSPACES_CUDA_PUT_MODE");
     const char *envcudagetmode = getenv("DSPACES_CUDA_GET_MODE");
@@ -1784,12 +1795,7 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
 
     size_t data_size = (elem_size)*bbox_volume(&odsc.bb);
 
-    // preset data volume for gdr / pipeline = 50% : 50%
-    // cut the data byte stream and record the offset
-    static double gdr_ratio = 0.5;
-    static double host_ratio = 0.5;
-
-    size_t offset = (size_t) (gdr_ratio * data_size);
+    size_t offset = (size_t) (client->cuda_info.dc_gdr_ratio * data_size);
     size_t gdr_rdma_size = offset;
     size_t host_rdma_size = data_size - gdr_rdma_size;
 
@@ -1981,7 +1987,7 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
 
             case 2: // finished
                 break;
-                
+
             default:
                 fprintf(stderr, "ERROR: (%s): margo_wait_any() failed, idx = %zu\n", __func__, req_idx);
                 free(req);
@@ -1997,18 +2003,18 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
         }
     } while (req_idx != 2); // margo_wait_any will set idx to count when all reqs are finished
 
-    double epsilon = 1e-3; // 1us
-    double lr = 0.1;
     // adjust data cutting ratio
     if(gdr_timer < host_timer) {
-        if(host_timer - gdr_timer < epsilon) {
-            gdr_ratio += ((host_timer - gdr_timer) / host_timer) * lr;
-            host_ratio = 1 - gdr_ratio;
+        if(host_timer - gdr_timer < client->cuda_info.dc_epsilon) {
+            client->cuda_info.dc_gdr_ratio += ((host_timer - gdr_timer) / host_timer)
+                                            * client->cuda_info.dc_learning_rate;
+            client->cuda_info.dc_host_ratio = 1 - client->cuda_info.dc_gdr_ratio;
         }
     } else {
-        if(gdr_timer - host_timer < epsilon) {
-            gdr_ratio -= ((gdr_timer - host_timer) / gdr_timer) * lr;
-            host_ratio = 1 - gdr_ratio;
+        if(gdr_timer - host_timer < client->cuda_info.dc_epsilon) {
+            client->cuda_info.dc_gdr_ratio -= ((gdr_timer - host_timer) / gdr_timer)
+                                            * client->cuda_info.dc_learning_rate;
+            client->cuda_info.dc_host_ratio = 1 - client->cuda_info.dc_gdr_ratio;
         }
     }
 
