@@ -1888,7 +1888,9 @@ struct dc_request *dc_req_alloc(struct obj_data *od)
     memset(dc_req, 0, sizeof(struct dc_request));
     
     dc_req->margo_req = (margo_request *) malloc(2*sizeof(margo_request));
-
+    for(int i=0; i<2; i++) {
+        dc_req->margo_req[i] = MARGO_REQUEST_NULL;
+    }
     dc_req->od = od;
     dc_req->f_error = 0;
     return dc_req;

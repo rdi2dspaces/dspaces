@@ -1369,6 +1369,10 @@ static void put_dc_rpc(hg_handle_t handle)
 
     size_t req_idx;
     if(!f_first_channel) {
+        // if either of the req is not init by margo_bulk_itransfer(), yield
+        while(dc_req->margo_req[0] == MARGO_REQUEST_NULL || dc_req->margo_req[1] == MARGO_REQUEST_NULL) {
+            ABT_thread_yield();
+        }
         do {
             hret = margo_wait_any(2, dc_req->margo_req, &req_idx);
             if(req_idx < 2) {
@@ -1376,7 +1380,7 @@ static void put_dc_rpc(hg_handle_t handle)
             }
             if(hret != HG_SUCCESS) {
                 if(req_idx == 0) {
-                    fprintf(stderr, "ERROR: (%s): margo_wait gdr_req failed!\n", __func__);
+                    fprintf(stderr, "ERROR: (%s): margo_wait gdr_req failed!, hret = %d\n", __func__, hret);
                 } else if(req_idx == 1) {
                     fprintf(stderr, "ERROR: (%s): margo_wait host_req failed!\n", __func__);
                 } else {
