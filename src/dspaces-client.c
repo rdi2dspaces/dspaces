@@ -1916,65 +1916,108 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
 
     struct timeval start, end;
     double gdr_timer, host_timer, wait_timer = 0; // timer in ms
+    double epsilon = 1e-3; // 1us
+    double lr = 0.1;
 
-    int wcount = 0;
-    int f_gdr_complete = 0, f_host_complete = 0;
-    while (wcount != 2)
-    {
-        gettimeofday(&start, NULL);
-        margo_test(gdr_req, &f_gdr_complete);
-        margo_test(host_req, &f_host_complete);
-        gettimeofday(&end, NULL);
-        wait_timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
-        if(f_gdr_complete) {
-            wcount++;
-            gdr_timer = wait_timer;
-            hret = margo_get_output(gdr_handle, &gdr_out);
-            if(hret != HG_SUCCESS) {
-                fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
-                free(h_buffer);
-                cudaStreamDestroy(stream);
-                margo_bulk_free(gdr_in.handle);
-                margo_destroy(gdr_handle);
-                margo_bulk_free(host_in.handle);
-                margo_destroy(host_handle);
-                return dspaces_ERR_MERCURY;
+    /*  Try to tune the ratio every 2 timesteps
+        At timestep (t), if 2nd timer(t) < 2e-6 s, means 2nd request(t) finishes no later than the 1st(t).
+            Keep the same ratio at (t+1), but swap the request.
+            If the 2nd timer(t+1) < 2e-6 s, means almost same time; else, tune the ratio and not swap request
+            Suppose gdr finishes first initially: wait_flag = 0 -> gdr first; wait_flag = 1 -> host first
+        else
+    */
+    margo_request *req0, *req1;
+    double *timer0, *timer1;
+    static int wait_flag = 0;
+    if(wait_flag == 0) {
+        req0 = &gdr_req;
+        timer0 = &gdr_timer;
+        req1 = &host_req;
+        timer1 = &host_timer;
+    } else {
+        req0 = &host_req;
+        timer0 = &host_timer;
+        req1 = &gdr_req;
+        timer1 = &gdr_timer;
+    }
+
+    gettimeofday(&start, NULL);
+    hret = margo_wait(*req0);
+    gettimeofday(&end, NULL);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_wait(): %s failed\n", __func__,
+                            wait_flag == 0 ? "gdr_req":"host_req");
+        free(h_buffer);
+        cudaStreamDestroy(stream);
+        margo_bulk_free(gdr_in.handle);
+        margo_destroy(gdr_handle);
+        margo_bulk_free(host_in.handle);
+        margo_destroy(host_handle);
+        return dspaces_ERR_MERCURY;
+    }
+    *timer0 = (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
+
+    gettimeofday(&start, NULL);
+    hret = margo_wait(*req1);
+    gettimeofday(&end, NULL);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_wait(): %s failed\n", __func__,
+                            wait_flag == 0 ? "host_req":"gdr_req");
+        free(h_buffer);
+        cudaStreamDestroy(stream);
+        margo_bulk_free(gdr_in.handle);
+        margo_destroy(gdr_handle);
+        margo_bulk_free(host_in.handle);
+        margo_destroy(host_handle);
+        return dspaces_ERR_MERCURY;
+    }
+    *timer1 = (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
+
+    if(*timer1 > 2e-3) {
+        // 2nd request takes longer time, tune ratio
+        if(gdr_timer < host_timer) {
+            if(host_timer - gdr_timer > epsilon) {
+                gdr_ratio += ((host_timer - gdr_timer) / host_timer) * lr;
+                host_ratio = 1 - gdr_ratio;
+            }
+        } else {
+            if(gdr_timer - host_timer > epsilon) {
+                gdr_ratio -= ((gdr_timer - host_timer) / gdr_timer) * lr;
+                host_ratio = 1 - gdr_ratio;
             }
         }
-        if(f_host_complete) {
-            wcount++;
-            host_timer = wait_timer;
-            hret = margo_get_output(host_handle, &host_out);
-            if(hret != HG_SUCCESS) {
-                fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
-                free(h_buffer);
-                cudaStreamDestroy(stream);
-                margo_bulk_free(gdr_in.handle);
-                margo_destroy(gdr_handle);
-                margo_bulk_free(host_in.handle);
-                margo_destroy(host_handle);
-                return dspaces_ERR_MERCURY;
-            }
-        }
+    } else {
+        // 2nd request finishes no later than the 1st request
+        // swap request by setting flag = 1
+        wait_flag == 0 ? 1:0;
     }
 
     DEBUG_OUT("ts = %u, gdr_ratio = %lf, host_ratio = %lf,"
                 "gdr_time = %lf, host_time = %lf\n", ver, gdr_ratio, host_ratio, 
                     gdr_timer, host_timer);
 
-    double epsilon = 1e-3; // 1us
-    double lr = 0.1;
-    // adjust data cutting ratio
-    if(gdr_timer < host_timer) {
-        if(host_timer - gdr_timer > epsilon) {
-            gdr_ratio += ((host_timer - gdr_timer) / host_timer) * lr;
-            host_ratio = 1 - gdr_ratio;
-        }
-    } else {
-        if(gdr_timer - host_timer > epsilon) {
-            gdr_ratio -= ((gdr_timer - host_timer) / gdr_timer) * lr;
-            host_ratio = 1 - gdr_ratio;
-        }
+    hret = margo_get_output(gdr_handle, &gdr_out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
+        free(h_buffer);
+        cudaStreamDestroy(stream);
+        margo_bulk_free(gdr_in.handle);
+        margo_destroy(gdr_handle);
+        margo_bulk_free(host_in.handle);
+        margo_destroy(host_handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    hret = margo_get_output(host_handle, &host_out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
+        free(h_buffer);
+        cudaStreamDestroy(stream);
+        margo_bulk_free(gdr_in.handle);
+        margo_destroy(gdr_handle);
+        margo_bulk_free(host_in.handle);
+        margo_destroy(host_handle);
+        return dspaces_ERR_MERCURY;
     }
 
     if(gdr_out.ret == 0 && host_out.ret == 0) {
