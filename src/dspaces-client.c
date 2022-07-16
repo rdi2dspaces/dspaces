@@ -21,6 +21,7 @@
 #include <cuda_runtime_api.h>
 #include <sys/time.h>
 #include <math.h>
+#include <stdbool.h>
 
 #ifdef HAVE_DRC
 #include <rdmacred.h>
@@ -754,6 +755,7 @@ static int dspaces_init_margo(dspaces_client_t client,
     struct hg_init_info hii;
     memset(&hii, 0, sizeof(hii));
     hii.na_init_info.auth_key = drc_key_str;
+    hii.na_init_info.request_mem_device = true;
 
     client->mid =
         margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, &hii, 0, 0);
@@ -1976,10 +1978,16 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
 
     if(*timer1 > 2e-3) {
         // 2nd request takes longer time, tune ratio
-        if(abs(*timer1 - *timer0) >epsilon) {
-            double ideal_gdr_ratio = expf(-1. * gdr_timer) / (expf(-1. * gdr_timer)+expf(-1. * host_timer));
-            gdr_ratio += (ideal_gdr_ratio-gdr_ratio) * lr;
-            host_ratio = 1-gdr_ratio;
+        if(gdr_timer < host_timer) {
+            if(host_timer - gdr_timer > epsilon) {
+                gdr_ratio += ((host_timer - gdr_timer) / host_timer) * lr;
+                host_ratio = 1 - gdr_ratio;
+            }
+        } else {
+            if(gdr_timer - host_timer > epsilon) {
+                gdr_ratio -= ((gdr_timer - host_timer) / gdr_timer) * lr;
+                host_ratio = 1 - gdr_ratio;
+            }
         }
     } else {
         // 2nd request finishes no later than the 1st request
