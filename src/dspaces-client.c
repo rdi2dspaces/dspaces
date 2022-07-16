@@ -1920,7 +1920,7 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
     struct timeval start, end;
     double gdr_timer, host_timer, wait_timer = 0; // timer in ms
     double epsilon = 1e-3; // 1us
-    double lr = 0.1;
+    double lr = 1.0;
 
     /*  Try to tune the ratio every 2 timesteps
         At timestep (t), if 2nd timer(t) < 2e-6 s, means 2nd request(t) finishes no later than the 1st(t).
@@ -1980,12 +1980,12 @@ static int cuda_put_dual_channel(dspaces_client_t client, const char *var_name, 
         // 2nd request takes longer time, tune ratio
         if(gdr_timer < host_timer) {
             if(host_timer - gdr_timer > epsilon) {
-                gdr_ratio += ((host_timer - gdr_timer) / host_timer) * lr;
+                gdr_ratio += ((host_timer - gdr_timer) / host_timer) * lr * (1-gdr_ratio);
                 host_ratio = 1 - gdr_ratio;
             }
         } else {
             if(gdr_timer - host_timer > epsilon) {
-                gdr_ratio -= ((gdr_timer - host_timer) / gdr_timer) * lr;
+                gdr_ratio -= ((gdr_timer - host_timer) / gdr_timer) * lr * (gdr_ratio-0);
                 host_ratio = 1 - gdr_ratio;
             }
         }
