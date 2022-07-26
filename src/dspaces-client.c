@@ -755,8 +755,13 @@ static int dspaces_init_margo(dspaces_client_t client,
     struct hg_init_info hii;
     memset(&hii, 0, sizeof(hii));
     hii.na_init_info.auth_key = drc_key_str;
-    hii.no_bulk_eager=1;
-    hii.na_init_info.request_mem_device = true;
+    if(client->cuda_info.cuda_put_mode == 1) {
+        hii.no_bulk_eager=0;
+        hii.na_init_info.request_mem_device = false;
+    } else {
+        hii.no_bulk_eager=1;
+        hii.na_init_info.request_mem_device = true;
+    }
 
     client->mid =
         margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, &hii, 0, 0);
@@ -764,8 +769,13 @@ static int dspaces_init_margo(dspaces_client_t client,
 #else
     struct hg_init_info hii;
     memset(&hii, 0, sizeof(hii));
-    hii.no_bulk_eager=1;
-    hii.na_init_info.request_mem_device = true;
+    if(client->cuda_info.cuda_put_mode == 1) {
+        hii.no_bulk_eager=0;
+        hii.na_init_info.request_mem_device = false;
+    } else {
+        hii.no_bulk_eager=1;
+        hii.na_init_info.request_mem_device = true;
+    }
     client->mid = margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, &hii, 0, 0);
 
 #endif /* HAVE_DRC */
@@ -892,13 +902,14 @@ static int dspaces_post_init(dspaces_client_t client)
     client->local_put_count = 0;
     client->f_final = 0;
 
-    int device;
+    int device, totdevice;
     CUDA_ASSERTRT(cudaGetDevice(&device));
+    CUDA_ASSERTRT(cudaGetDeviceCount(&totdevice));
     meminfo_t meminfo = parse_meminfo();
     size_t d_free, d_total;
     CUDA_ASSERTRT(cudaMemGetInfo(&d_free, &d_total));
-    DEBUG_OUT("Rank %d: Device = %d, Host Free Memory = %lld, Device Free Memory = %zu \n",
-                client->rank, device, meminfo.MemAvailableMiB, d_free);
+    DEBUG_OUT("Rank %d: Device = %d/%d, Host Free Memory = %lld, Device Free Memory = %zu \n",
+                client->rank, device, totdevice, meminfo.MemAvailableMiB, d_free);
 
 
     return (dspaces_SUCCESS);
