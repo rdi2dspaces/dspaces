@@ -2763,7 +2763,7 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
         // H->D async transfer
         size_t data_size = (req_obj.size) * bbox_volume(&odsc_tab[i].bb);
         if(client->cuda_info.concurrency_enabled) {
-            curet = cudaMemcpyAsync(host_od[i]->data, device_od[i]->data, data_size,
+            curet = cudaMemcpyAsync(device_od[i]->data, host_od[i]->data, data_size,
                                     cudaMemcpyHostToDevice, stream[i%stream_size]);
             if(curet != cudaSuccess) {
                 fprintf(stderr, "ERROR: (%s): cudaMemcpyAsync() failed, Err Code: (%s)\n",
@@ -2799,8 +2799,8 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
             }
             gettimeofday(&end, NULL);
         } else {
-            curet = cudaMemcpy(host_od[i]->data, device_od[i]->data, data_size,
-                                    cudaMemcpyHostToDevice);
+            curet = cudaMemcpy(device_od[i]->data, host_od[i]->data, data_size,
+                                cudaMemcpyHostToDevice);
             if(curet != cudaSuccess) {
                 fprintf(stderr, "ERROR: (%s): cudaMemcpy() failed, Err Code: (%s)\n",
                         __func__, cudaGetErrorString(curet));
