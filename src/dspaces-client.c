@@ -2742,7 +2742,7 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
                 free(hndl);
                 free(serv_req);
                 for(int i = 0; i < num_odscs; i++) {
-                    obj_data_free_cuda(host_od[i]);
+                    obj_data_free(host_od[i]);
                 }
                 free(host_od);
                 free(in);
@@ -2774,7 +2774,7 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
                 free(serv_req);
                 for(int i = 0; i < num_odscs; i++) {
                     obj_data_free_cuda(device_od[i]);
-                    obj_data_free_cuda(host_od[i]);
+                    obj_data_free(host_od[i]);
                 }
                 free(host_od);
                 free(in);
@@ -2791,7 +2791,7 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
                 free(serv_req);
                 for(int i = 0; i < num_odscs; i++) {
                     obj_data_free_cuda(device_od[i]);
-                    obj_data_free_cuda(host_od[i]);
+                    obj_data_free(host_od[i]);
                 }
                 free(host_od);
                 free(in);
@@ -2810,7 +2810,7 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
                 free(serv_req);
                 for(int i = 0; i < num_odscs; i++) {
                     obj_data_free_cuda(device_od[i]);
-                    obj_data_free_cuda(host_od[i]);
+                    obj_data_free(host_od[i]);
                 }
                 free(host_od);
                 free(in);
@@ -2828,7 +2828,7 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
                 free(serv_req);
                 for(int i = 0; i < num_odscs; i++) {
                     obj_data_free_cuda(device_od[i]);
-                    obj_data_free_cuda(host_od[i]);
+                    obj_data_free(host_od[i]);
                 }
                 free(host_od);
                 free(in);
@@ -2856,7 +2856,7 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
                 free(serv_req);
                 for(int i = 0; i < num_odscs; i++) {
                     obj_data_free_cuda(device_od[i]);
-                    obj_data_free_cuda(host_od[i]);
+                    obj_data_free(host_od[i]);
                 }
                 free(host_od);
                 free(in);
@@ -2873,7 +2873,7 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
                 free(serv_req);
                 for(int i = 0; i < num_odscs; i++) {
                     obj_data_free_cuda(device_od[i]);
-                    obj_data_free_cuda(host_od[i]);
+                    obj_data_free(host_od[i]);
                 }
                 free(host_od);
                 free(in);
@@ -2885,14 +2885,13 @@ static int get_data_hybrid(dspaces_client_t client, int num_odscs,
 
         for(int i = 0; i < num_odscs; i++) {
             obj_data_free_cuda(device_od[i]);
-            obj_data_free_cuda(host_od[i]);
+            obj_data_free(host_od[i]);
         }
     }
 
     free(device_od);
     free(hndl);
     free(serv_req);
-    free(device_od);
     free(host_od);
     free(in);
     free(return_od);
