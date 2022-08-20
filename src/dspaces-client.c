@@ -648,7 +648,7 @@ static int dspaces_init_gpu(dspaces_client_t client)
         int cudagetmode = atoi(envcudagetmode);
 
         //mode check
-        if(cudagetmode>=1 && cudagetmode <3) {
+        if(cudagetmode>=1 && cudagetmode <4) {
             client->cuda_info.cuda_get_mode = cudagetmode;
         } else {
             client->cuda_info.cuda_get_mode = 1;
@@ -717,6 +717,9 @@ static int dspaces_init_gpu(dspaces_client_t client)
         break;  
     case 2:
         sprintf(hint, "GDR");
+        break;
+    case 3:
+        sprintf(hint, "Hybrid");
         break;
     default:
         sprintf(hint, "Error");
@@ -3267,6 +3270,15 @@ int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int
         {
             gettimeofday(&start, NULL);
             ret = get_data_gdr(client, num_odscs, odsc, odsc_tab, data, ctime);
+            gettimeofday(&end, NULL);
+            timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
+            break;
+        }
+        // Hybrid
+        case 3:
+        {
+            gettimeofday(&start, NULL);
+            ret = get_data_hybrid(client, num_odscs, odsc, odsc_tab, data, ctime);
             gettimeofday(&end, NULL);
             timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
             break;
