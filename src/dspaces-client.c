@@ -1249,7 +1249,7 @@ static int cuda_put_baseline(dspaces_client_t client, const char *var_name, unsi
 
     DEBUG_OUT("sending object %s \n", obj_desc_sprint(&odsc));
 
-    hret = margo_bulk_create(client->mid, 1, (void **)&data, &rdma_size,
+    hret = margo_bulk_create(client->mid, 1, (void **)&buffer, &rdma_size,
                              HG_BULK_READ_ONLY, &in.handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n", __func__);
