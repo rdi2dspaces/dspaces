@@ -758,7 +758,7 @@ static int dspaces_init_margo(dspaces_client_t client,
     struct hg_init_info hii;
     memset(&hii, 0, sizeof(hii));
     hii.na_init_info.auth_key = drc_key_str;
-    if(client->cuda_info.cuda_put_mode == 1) {
+    if(client->cuda_info.cuda_put_mode == 1 && client->cuda_info.cuda_get_mode != 2) {
         hii.no_bulk_eager=0;
         hii.na_init_info.request_mem_device = false;
     } else {
@@ -772,7 +772,7 @@ static int dspaces_init_margo(dspaces_client_t client,
 #else
     struct hg_init_info hii;
     memset(&hii, 0, sizeof(hii));
-    if(client->cuda_info.cuda_put_mode == 1) {
+    if(client->cuda_info.cuda_put_mode == 1 && client->cuda_info.cuda_get_mode != 2) {
         hii.no_bulk_eager=0;
         hii.na_init_info.request_mem_device = false;
     } else {
