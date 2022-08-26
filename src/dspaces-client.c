@@ -3254,13 +3254,13 @@ int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int
             void* buffer = (void*) malloc(rdma_size);
             gettimeofday(&start, NULL);
             get_data_baseline(client, num_odscs, odsc, odsc_tab, buffer, ctime);
-            gettimeofday(&end, NULL);
-            timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
             curet = cudaMemcpy(data, buffer, rdma_size, cudaMemcpyHostToDevice);
             if(curet != cudaSuccess) {
                 fprintf(stderr, "ERROR: (%s): cudaMemcpy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
                 ret = dspaces_ERR_CUDA;
             }
+            gettimeofday(&end, NULL);
+            timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
             free(buffer);
             break;
         }
@@ -3288,13 +3288,13 @@ int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int
             void* buffer = (void*) malloc(rdma_size);
             gettimeofday(&start, NULL);
             get_data_baseline(client, num_odscs, odsc, odsc_tab, buffer, ctime);
-            gettimeofday(&end, NULL);
-            timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
             curet = cudaMemcpy(data, buffer, rdma_size, cudaMemcpyHostToDevice);
             if(curet != cudaSuccess) {
                 fprintf(stderr, "ERROR: (%s): cudaMemcpy() failed, Err Code: (%s)\n", __func__, cudaGetErrorString(curet));
                 ret = dspaces_ERR_CUDA;
             }
+            gettimeofday(&end, NULL);
+            timer += (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_usec - start.tv_usec) * 1e-3;
             free(buffer);
             break;
         }
