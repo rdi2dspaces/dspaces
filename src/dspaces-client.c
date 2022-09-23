@@ -1117,7 +1117,7 @@ static int setup_put(dspaces_client_t client, const char *var_name,
     }
 }
 
-int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
+int dspaces_cpu_put(dspaces_client_t client, const char *var_name, unsigned int ver,
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
                 const void *data)
 {
@@ -2107,6 +2107,21 @@ int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsigned int
         break;
     }
 
+    return ret;
+}
+
+int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
+                int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
+                const void *data)
+{
+    int ret;
+    struct cudaPointerAttributes ptr_attr;
+    CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, data));
+    if(ptr_attr.type == cudaMemoryTypeDevice) {
+        ret = dspaces_cuda_put(client, var_name, ver, elem_size, ndim, lb, ub, data);
+    } else {
+        ret = dspaces_cpu_put(client, var_name, ver, elem_size, ndim, lb, ub, data);
+    }
     return ret;
 }
 
@@ -3191,7 +3206,7 @@ int dspaces_aget(dspaces_client_t client, const char *var_name,
     return ret;
 }
 
-int dspaces_get(dspaces_client_t client, const char *var_name, unsigned int ver,
+int dspaces_cpu_get(dspaces_client_t client, const char *var_name, unsigned int ver,
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub, void *data,
                 int timeout)
 {
@@ -3304,6 +3319,22 @@ int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int
     }
 
     return (ret);
+}
+
+int dspaces_get(dspaces_client_t client, const char *var_name, unsigned int ver,
+                int elem_size, int ndim, uint64_t *lb, uint64_t *ub, void *data,
+                int timeout)
+{
+    int ret;
+    double ttime, ctime;
+    struct cudaPointerAttributes ptr_attr;
+    CUDA_ASSERTRT(cudaPointerGetAttributes(&ptr_attr, data));
+    if(ptr_attr.type == cudaMemoryTypeDevice) {
+        ret = dspaces_cuda_get(client, var_name, ver, elem_size, ndim, lb, ub, data, timeout, &ttime, &ctime);
+    } else {
+        ret = dspaces_cpu_get(client, var_name, ver, elem_size, ndim, lb, ub, data, timeout);
+    }
+    return ret;
 }
 
 int dspaces_get_meta(dspaces_client_t client, const char *name, int mode,
