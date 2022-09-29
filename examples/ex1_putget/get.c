@@ -38,7 +38,7 @@ int main(int argc, char **argv)
         uint64_t lb = 0, ub = 2;
 
         // DataSpaces: Get data array from the space
-        // Usage: dspaces_get(Name of variable, version num,
+        // Usage: dspaces_get(Client, name of variable, version num,
         // size (in bytes of each element), dimensions for bounding box,
         // lower bound coordinates, upper bound coordinates,
         // ptr to data buffer, flag value (-1) means wait for data indefinitely
