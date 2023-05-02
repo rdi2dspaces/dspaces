@@ -745,7 +745,6 @@ static int dspaces_init_margo(dspaces_client_t client,
             "{ \"use_progress_thread\" : false, \"rpc_thread_count\" : 0}");
     hii.request_post_init = 1024;
     hii.auto_sm = false;
-    hii.no_multi_recv = true;
     if(client->cuda_info.cuda_put_mode == 1 && client->cuda_info.cuda_get_mode != 2) {
         hii.no_bulk_eager=0;
         hii.na_init_info.request_mem_device = false;

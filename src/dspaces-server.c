@@ -846,7 +846,6 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
             num_handlers);
     hii.request_post_init = 1024;
     hii.auto_sm = false;    
-    hii.no_multi_recv = true;
     mii.hg_init_info = &hii;
     mii.json_config = margo_conf;
     ABT_init(0, NULL);
