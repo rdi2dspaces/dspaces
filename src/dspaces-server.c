@@ -809,6 +809,9 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
     hg_bool_t flag;
     hg_id_t id;
     int num_handlers = DSPACES_DEFAULT_NUM_HANDLERS;
+    struct hg_init_info hii = HG_INIT_INFO_INITIALIZER;
+    char margo_conf[1024];
+    struct margo_init_info mii = MARGO_INIT_INFO_INITIALIZER;
 
     if(is_initialized) {
         fprintf(stderr,
@@ -838,6 +841,14 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
     MPI_Comm_rank(comm, &server->rank);
 
     margo_set_environment(NULL);
+    sprintf(margo_conf,
+            "{ \"use_progress_thread\" : true, \"rpc_thread_count\" : %d }",
+            num_handlers);
+    hii.request_post_init = 1024;
+    hii.auto_sm = false;    
+    hii.no_multi_recv = true;
+    mii.hg_init_info = &hii;
+    mii.json_config = margo_conf;
     ABT_init(0, NULL);
 
 #ifdef HAVE_DRC
@@ -870,8 +881,6 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
     drc_cookie = drc_get_first_cookie(drc_credential_info);
     sprintf(drc_key_str, "%u", drc_cookie);
 
-    struct hg_init_info hii;
-    memset(&hii, 0, sizeof(hii));
     hii.na_init_info.auth_key = drc_key_str;
 
     /* rank 0 grants access to the credential, allowing other jobs to use it */
@@ -885,13 +894,12 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
         }
     }
 
-    server->mid = margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, &hii, 1,
-                                 num_handlers);
+    server->mid = margo_init_ext(listen_addr_str, MARGO_SERVER_MODE, &mii);
 
 #else
 
     server->mid =
-        margo_init(listen_addr_str, MARGO_SERVER_MODE, 1, num_handlers);
+        margo_init_ext(listen_addr_str, MARGO_SERVER_MODE, &mii);
 
 #endif /* HAVE_DRC */
 

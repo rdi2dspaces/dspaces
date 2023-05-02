@@ -735,9 +735,26 @@ static int dspaces_init_margo(dspaces_client_t client,
                               const char *listen_addr_str)
 {
     hg_class_t *hg;
+    struct hg_init_info hii = HG_INIT_INFO_INITIALIZER;
+    char margo_conf[1024];
+    struct margo_init_info mii = MARGO_INIT_INFO_INITIALIZER;
     int i;
 
     margo_set_environment(NULL);
+    sprintf(margo_conf,
+            "{ \"use_progress_thread\" : false, \"rpc_thread_count\" : 0}");
+    hii.request_post_init = 1024;
+    hii.auto_sm = false;
+    hii.no_multi_recv = true;
+    if(client->cuda_info.cuda_put_mode == 1 && client->cuda_info.cuda_get_mode != 2) {
+        hii.no_bulk_eager=0;
+        hii.na_init_info.request_mem_device = false;
+    } else {
+        hii.no_bulk_eager=1;
+        hii.na_init_info.request_mem_device = true;
+    }
+    mii.hg_init_info = &hii;
+    mii.json_config = margo_conf;
     ABT_init(0, NULL);
 
 #ifdef HAVE_DRC
@@ -755,31 +772,21 @@ static int dspaces_init_margo(dspaces_client_t client,
     drc_cookie = drc_get_first_cookie(drc_credential_info);
     sprintf(drc_key_str, "%u", drc_cookie);
 
-    struct hg_init_info hii;
-    memset(&hii, 0, sizeof(hii));
     hii.na_init_info.auth_key = drc_key_str;
-    if(client->cuda_info.cuda_put_mode == 1 && client->cuda_info.cuda_get_mode != 2) {
-        hii.no_bulk_eager=0;
-        hii.na_init_info.request_mem_device = false;
-    } else {
-        hii.no_bulk_eager=1;
-        hii.na_init_info.request_mem_device = true;
-    }
 
     client->mid =
-        margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, &hii, 0, 0);
+        margo_init_ext(listen_addr_str, MARGO_SERVER_MODE, &mii);
 
 #else
-    struct hg_init_info hii;
-    memset(&hii, 0, sizeof(hii));
-    if(client->cuda_info.cuda_put_mode == 1 && client->cuda_info.cuda_get_mode != 2) {
-        hii.no_bulk_eager=0;
-        hii.na_init_info.request_mem_device = false;
-    } else {
-        hii.no_bulk_eager=1;
-        hii.na_init_info.request_mem_device = true;
+    client->mid = margo_init_ext(listen_addr_str, MARGO_SERVER_MODE, &mii);
+    if(client->f_debug) {
+        if(!client->rank) {
+            char *margo_json = margo_get_config(client->mid);
+            fprintf(stderr, "%s", margo_json);
+            free(margo_json);
+        }
+        margo_set_log_level(client->mid, MARGO_LOG_TRACE);
     }
-    client->mid = margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, &hii, 0, 0);
 
 #endif /* HAVE_DRC */
 
