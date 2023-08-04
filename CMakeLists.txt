@@ -62,6 +62,8 @@ include (xpkg-import)
 xpkg_import_module (margo REQUIRED margo)
 xpkg_import_module (liblz4 REQUIRED liblz4)
 
+include(grpc)
+
 include(python_bindings)
 
 find_package(MPI COMPONENTS REQUIRED)
