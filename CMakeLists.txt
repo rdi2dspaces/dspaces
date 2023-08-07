@@ -9,7 +9,7 @@
 #
 
 cmake_minimum_required (VERSION 3.16)
-project (dspaces VERSION 2.2.0 LANGUAGES C)
+project (dspaces VERSION 2.2.0 LANGUAGES C CXX Fortran)
 
 cmake_policy(SET CMP0078 NEW)
 cmake_policy(SET CMP0086 NEW)
