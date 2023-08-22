@@ -8,7 +8,13 @@
 #include "dspacesp.h"
 #include "gspace.h"
 #include "ss_data.h"
+#define DSP_INTERNAL // TODO: separate private and public dspaces-ops header
 #include "dspaces-ops.h"
+
+#ifdef DSPACES_USE_GRPC
+#include "rpc/wrapper_grpc.h"
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -688,6 +694,11 @@ int dspaces_init_mpi(MPI_Comm comm, dspaces_client_t *c)
     }
     dspaces_init_margo(client, listen_addr_str);
     free(listen_addr_str);
+
+    grpc_client_t gclient = dspaces_grpc_client_init("localhost:1025");
+    char *reply = dspaces_grpc_client_send_msg(gclient, "dataspaces");
+    fprintf(stdout, "grpc reply: %s\n", reply);
+    free(reply);
 
     choose_server(client);
     init_ss_info_mpi(client, comm);

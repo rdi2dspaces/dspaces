@@ -4,6 +4,7 @@ if(DSPACES_USE_GRPC)
     include(FetchContent)
     set(ABSL_ENABLE_INSTALL ON)
     set(ABSL_PROPAGATE_CXX_STD ON)
+    set(gRPC_INSTALL ON)
     FetchContent_Declare(
         gRPC
         GIT_REPOSITORY https://github.com/grpc/grpc

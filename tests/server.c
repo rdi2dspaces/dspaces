@@ -6,7 +6,6 @@
  */
 
 #include <dspaces-server.h>
-#include <margo.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

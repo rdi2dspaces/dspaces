@@ -8,7 +8,6 @@
 #include "mpi.h"
 #include "timer.h"
 #include <dspaces.h>
-#include <margo.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -7,7 +7,6 @@
 
 #include <dspaces-server.h>
 #include <dspaces.h>
-#include <margo.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

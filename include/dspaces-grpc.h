@@ -1,1 +1,0 @@
-void grpc_placeholder();

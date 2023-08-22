@@ -3,7 +3,8 @@
  * University
  *
  * See COPYRIGHT in top-level directory.
- */
+*/
+#define DSP_INTERNAL //TODO: separate internal and external ops header 
 #include "dspaces-ops.h"
 #include "dspaces-server.h"
 #include "dspaces-storage.h"
@@ -12,6 +13,10 @@
 #include "gspace.h"
 #include "ss_data.h"
 #include "toml.h"
+
+#ifdef DSPACES_USE_GRPC
+#include "rpc/wrapper_grpc.h"
+#endif
 
 #include <abt.h>
 #include <errno.h>
@@ -86,7 +91,7 @@ struct dspaces_provider {
     struct ds_gspace *dsg;
     char **server_address;
     char **node_names;
-    char *listen_addr_str;
+    char *listen_addr_str_hcp;
     int rank;
     int comm_size;
     int f_debug;
@@ -146,6 +151,8 @@ static void do_ops_rpc(hg_handle_t h);
 /* Server configuration parameters */
 static struct {
     int ndim;
+    char conn_hpc[256];
+    char conn_wan[256];
     struct coord dims;
     int max_versions;
     int hash_version; /* 1 - ssd_hash_version_v1, 2 - ssd_hash_version_v2 */
@@ -156,6 +163,8 @@ static struct {
     const char *opt;
     int *pval;
 } options[] = {{"ndim", &ds_conf.ndim},
+               {"hpc_connector", (int *)&ds_conf.conn_hpc},
+               {"wan_connector", (int *)&ds_conf.conn_wan},
                {"dims", (int *)&ds_conf.dims},
                {"max_versions", &ds_conf.max_versions},
                {"hash_version", &ds_conf.hash_version},
@@ -318,6 +327,10 @@ static int parse_conf_toml(const char *fname, struct list_head *dir_list, struct
                     *(int *)options[j].pval = ndim;
                 }
             }
+        } else if(strcmp(options[i].opt, "hpc_connector") == 0 || strcmp(options[i].opt, "wan_connector") == 0) {
+           dat = toml_string_in(remote, "ip");
+           strcpy(*(char **)options[i].pval, dat.u.s);
+           free(dat.u.s);
         } else {
             dat = toml_int_in(server, options[i].opt);
             if(dat.ok) {
@@ -564,19 +577,15 @@ void print_conf()
     printf("=========================\n");
 }
 
-static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
-                     MPI_Comm comm)
+static int config_server(dspaces_provider_t server, const char *conf_name)
 {
-    struct ds_gspace *dsg_l;
-    char *ext;
     int err = -ENOMEM;
+    char *ext;
 
     /* Default values */
     ds_conf.max_versions = 255;
     ds_conf.hash_version = ssd_hash_version_auto;
     ds_conf.num_apps = -1;
-
-    INIT_LIST_HEAD(&server->dirs);
 
     ext = strrchr(conf_name, '.');
     if(!ext || strcmp(ext, ".toml") != 0) {
@@ -613,6 +622,18 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
         goto err_out;
     }
 
+    return(0);
+
+err_out:
+    fprintf(stderr, "'%s()': failed with %d.\n", __func__, err);
+    return err;
+}
+
+static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
+                     MPI_Comm comm)
+{
+    struct ds_gspace *dsg_l;
+    int err = -ENOMEM;
     struct bbox domain;
     memset(&domain, 0, sizeof(struct bbox));
     domain.num_dims = ds_conf.ndim;
@@ -978,6 +999,11 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
 
     MPI_Comm_dup(comm, &server->comm);
     MPI_Comm_rank(comm, &server->rank);
+
+    config_server(server, conf_file);
+
+
+    dspaces_grpc_server_init("localhost:1025");
 
     margo_set_environment(NULL);
     sprintf(margo_conf,

@@ -4,10 +4,25 @@ if(HAVE_DRC)
     add_definitions( -DHAVE_DRC)
 endif()
 
-# list of source files
-set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c dspaces-ops.c)
-if(DSPACES_USING_GRPC)
-    list(APPEND dspaces-src dspaces-grpc.cpp)
+if(DSPACES_USE_GRPC)
+    find_program(PROTOC_EXE protoc)
+    find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin)
+    get_filename_component(ds_proto "rpc/proto/dspaces.proto" ABSOLUTE)
+    get_filename_component(ds_proto_path "${ds_proto}" PATH)
+    set(ds_proto_srcs "${CMAKE_CURRENT_BINARY_DIR}/rpc/dspaces.pb.cc")
+    set(ds_proto_hdrs "${CMAKE_CURRENT_BINARY_DIR}/rpc/dspaces.pb.h")
+    set(ds_grpc_srcs "${CMAKE_CURRENT_BINARY_DIR}/rpc/dspaces.grpc.pb.cc")
+    set(ds_grpc_hdrs "${CMAKE_CURRENT_BINARY_DIR}/rpc/dspaces.grpc.pb.h")
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/rpc)
+    add_custom_command(
+      OUTPUT "${ds_proto_srcs}" "${ds_proto_hdrs}" "${ds_grpc_srcs}" "${ds_grpc_hdrs}"
+      COMMAND ${PROTOC_EXE}
+      ARGS --grpc_out "${CMAKE_CURRENT_BINARY_DIR}/rpc"
+        --cpp_out "${CMAKE_CURRENT_BINARY_DIR}/rpc"
+        -I "${ds_proto_path}"
+        --plugin=protoc-gen-grpc="${_GRPC_CPP_PLUGIN_EXECUTABLE}"
+        "${ds_proto}"
+      DEPENDS "${ds_proto}")
 endif()
 
 # load package helper for generating cmake CONFIG packages
@@ -18,17 +33,27 @@ set (dspaces-pkg "share/cmake/dspaces")
 
 set (dspaces-vers "${dspaces_VERSION_MAJOR}.${dspaces_VERSION_MINOR}")
 
+# list of source files
+set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c dspaces-ops.c)
+if(DSPACES_USE_GRPC)
+    list(APPEND dspaces-src rpc/wrapper_grpc.cpp
+        ${ds_grpc_srcs}
+        ${ds_proto_srcs})
+endif()
+
 add_library(dspaces ${dspaces-src})
 if(HAVE_DRC)
-    target_link_libraries (dspaces margo m pthread ${DRC_LIBRARIES} liblz4)
+    target_link_libraries (dspaces PRIVATE margo m pthread ${DRC_LIBRARIES} liblz4)
     target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${DRC_INCLUDE_DIRS})
 else()
-    target_link_libraries (dspaces margo m pthread liblz4)
+    target_link_libraries (dspaces PRIVATE margo m pthread liblz4)
     target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include>)
 endif()
 
-if(DSPACES_USING_GRPC)
-    target_link_libraries (dspaces grpc++)
+if(DSPACES_USE_GRPC)
+    target_link_libraries (dspaces PRIVATE grpc++)
+    target_include_directories(dspaces BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR})
 endif()
 
 # local include's BEFORE, in case old incompatable .h files in prefix/include
@@ -42,17 +67,28 @@ set_target_properties (dspaces
 
 set(dspaces-server-src util.c bbox.c ss_data.c dspaces-server.c toml.c)
 
+if(DSPACES_USE_GRPC)
+    list(APPEND dspaces-server-src rpc/wrapper_grpc.cpp 
+        ${ds_grpc_srcs}
+        ${ds_proto_srcs})
+endif()
+
 add_library(dspaces-server ${dspaces-server-src} ${dspaces-src})
 if(HAVE_DRC)
-    target_link_libraries (dspaces-server margo m pthread ${DRC_LIBRARIES} liblz4)
+    target_link_libraries (dspaces-server PRIVATE margo m pthread ${DRC_LIBRARIES} liblz4)
     target_include_directories (dspaces-server BEFORE PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> ${DRC_INCLUDE_DIRS})
 else()
-    target_link_libraries (dspaces-server margo m pthread liblz4)
+    target_link_libraries (dspaces-server PRIVATE margo m pthread liblz4)
     target_include_directories (dspaces-server BEFORE PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>)
 endif()
 
+if(DSPACES_USE_GRPC)
+    target_link_libraries (dspaces-server PRIVATE grpc++)
+    target_include_directories(dspaces-server BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR})
+endif()
 
 # for shared libs, establish the lib version
 set_target_properties (dspaces-server

@@ -18,6 +18,8 @@ echo "## Config file for DataSpaces
 dims = [ 256, 256, 256 ]
 max_versions = 8
 num_apps = 2
+hpc_connector = "sockets"
+wan_connector = "192.168.0.100:1025"
 " > dspaces.toml
 
 rm -rf conf.ds

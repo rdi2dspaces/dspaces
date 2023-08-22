@@ -2,7 +2,10 @@
 #define __DSPACES_OP_H__
 
 #include<dspaces.h>
+#include<list.h>
+#ifdef DSP_INTERNAL
 #include<ss_data.h>
+#endif
 
 typedef enum ds_operator {
     DS_OP_OBJ,
@@ -33,6 +36,7 @@ typedef struct ds_data_expr {
     uint64_t size;
 } *ds_expr_t;
 
+#ifdef DSP_INTERNAL
 static inline hg_return_t hg_proc_ds_expr_t(hg_proc_t proc, void *data)
 {
     void **datav;
@@ -161,6 +165,7 @@ static inline hg_return_t hg_proc_ds_expr_t(hg_proc_t proc, void *data)
 }
 
 MERCURY_GEN_PROC(do_ops_in_t, ((hg_bulk_t)(handle))((ds_expr_t)(expr)))
+#endif
 
 struct ds_data_expr *dspaces_op_new_obj(dspaces_client_t client, const char *var_name, unsigned int ver, ds_val_t type, int ndim, uint64_t *lb, uint64_t *ub);
 
