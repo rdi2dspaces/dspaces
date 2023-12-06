@@ -1613,7 +1613,7 @@ int dspaces_aget(dspaces_client_t client, const char *var_name,
     int num_odscs;
     int elem_size;
     int num_elem = 1;
-    int i;
+    int i, j;
     int ret = dspaces_SUCCESS;
 
     fill_odsc(client, var_name, ver, 0, ndim, lb, ub, &odsc);
@@ -1623,7 +1623,14 @@ int dspaces_aget(dspaces_client_t client, const char *var_name,
     num_odscs = get_odscs(client, &odsc, timeout, &odsc_tab);
 
     DEBUG_OUT("Finished query - need to fetch %d objects\n", num_odscs);
-    for(int i = 0; i < num_odscs; ++i) {
+    for(int i = 0; i < num_odscs; i++) {
+        if(odsc_tab[i].flags && DS_OBJ_RESIZE) {
+            DEBUG_OUT("the result is cropped.\n");
+            memcpy(&odsc.bb, &odsc_tab[i].bb, sizeof(odsc_tab[i].bb));
+            for(j = 0; j < odsc.bb.num_dims; j++) {
+                ub[j] = odsc.bb.ub.c[j];
+            }
+        }
         DEBUG_OUT("%s\n", obj_desc_sprint(&odsc_tab[i]));
     }
 
@@ -1645,7 +1652,9 @@ int dspaces_aget(dspaces_client_t client, const char *var_name,
         *tag = odsc_tab[0].tag;
         for(i = 1; i < num_odscs; i++) {
             if(odsc_tab[i].tag != *tag) {
-                fprintf(stderr, "WARNING: multiple distinct tag values returned in query result. Returning first one.\n");
+                fprintf(stderr,
+                        "WARNING: multiple distinct tag values returned in "
+                        "query result. Returning first one.\n");
                 break;
             }
         }

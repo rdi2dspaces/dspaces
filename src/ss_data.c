@@ -769,7 +769,8 @@ char *obj_desc_sprint(obj_descriptor *odsc)
                         "\t.size = %i,\n"
                         "\t.tag = %i,\n"
                         "\t.bb = ",
-                        odsc->name, odsc->owner, odsc->version, odsc->size, odsc->tag);
+                        odsc->name, odsc->owner, odsc->version, odsc->size,
+                        odsc->tag);
     str = str_append_const(str_append(str, bbox_sprint(&odsc->bb)), "}\n");
 
     return str;
@@ -1127,6 +1128,7 @@ struct obj_data *obj_data_alloc(obj_descriptor *odsc)
     memset(od, 0, sizeof(*od));
 
     int size = obj_data_size(odsc);
+    fprintf(stderr, "%s: %i\n", __func__, size);
     od->data = malloc(size);
     if(!od->data) {
         fprintf(stderr, "Malloc od_data error\n");
@@ -1194,6 +1196,17 @@ void obj_data_free(struct obj_data *od)
 uint64_t obj_data_size(obj_descriptor *obj_desc)
 {
     return obj_desc->size * bbox_volume(&obj_desc->bb);
+}
+
+void obj_data_resize(obj_descriptor *obj_desc, uint64_t *new_dims)
+{
+    struct bbox *bb = &obj_desc->bb;
+    int i;
+
+    for(i = 0; i < bb->num_dims; i++) {
+        bb->ub.c[i] = bb->lb.c[i] + (new_dims[i] - 1);
+    }
+    obj_desc->flags ^= DS_OBJ_RESIZE;
 }
 
 int obj_desc_equals_no_owner(const obj_descriptor *odsc1,

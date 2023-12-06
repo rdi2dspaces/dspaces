@@ -93,6 +93,8 @@ struct dspaces_module_args {
 struct dspaces_module_ret {
     int type;
     int len;
+    uint64_t *dim;
+    int ndim;
     int tag;
     int elem_size;
     void *data;
@@ -997,7 +999,6 @@ static int dspaces_init_py_mods(dspaces_provider_t server,
     int npmods = 1;
     PyObject *pName;
 
-    
     pypath_len = strlen(xstr(DSPACES_MOD_DIR)) + 1;
     if(pypath) {
         pypath_len += strlen(pypath) + 1;
@@ -1841,9 +1842,18 @@ static struct dspaces_module_ret *py_res_buf(PyObject *pResult)
     PyArrayObject *pArray;
     struct dspaces_module_ret *ret = malloc(sizeof(*ret));
     size_t data_len;
+    npy_intp *dims;
+    int i;
 
     pArray = (PyArrayObject *)pResult;
-    ret->len = PyArray_SIZE(pArray);
+    ret->ndim = PyArray_NDIM(pArray);
+    ret->dim = malloc(sizeof(*ret->dim * ret->ndim));
+    dims = PyArray_DIMS(pArray);
+    ret->len = 1;
+    for(i = 0; i < ret->ndim; i++) {
+        ret->dim[i] = dims[i];
+        ret->len *= dims[i];
+    }
     ret->tag = PyArray_TYPE(pArray);
     ret->elem_size = PyArray_ITEMSIZE(pArray);
     data_len = ret->len * ret->elem_size;
@@ -2007,6 +2017,7 @@ static void route_request(dspaces_provider_t server, obj_descriptor *odsc,
     struct obj_data *od;
     obj_descriptor *od_odsc;
     int nargs;
+    int i;
 
     DEBUG_OUT("Routing '%s'\n", odsc->name);
 
@@ -2028,6 +2039,10 @@ static void route_request(dspaces_provider_t server, obj_descriptor *odsc,
             free(res->data);
         } else {
             odsc->size = res->elem_size;
+            if((odsc->size * res->len) < obj_data_size(odsc)) {
+                DEBUG_OUT("returned data is cropped.\n");
+                obj_data_resize(odsc, res->dim);
+            }
             od_odsc = malloc(sizeof(*od_odsc));
             memcpy(od_odsc, odsc, sizeof(*od_odsc));
             odsc_take_ownership(server, od_odsc);
@@ -2116,6 +2131,14 @@ static int get_query_odscs(dspaces_provider_t server, odsc_gdim_t *query,
         margo_addr_free(server->mid, server_addr);
     }
 
+    if(peer_num == 0) {
+        DEBUG_OUT("no peers in global space, handling with modules only\n");
+        odsc_tabs = malloc(sizeof(*odsc_tabs));
+        odsc_nums = calloc(sizeof(*odsc_nums), 1);
+        route_request(server, q_odsc, q_gdim);
+        self_id_num = 0;
+    }
+
     if(self_id_num > -1) {
         route_request(server, q_odsc, q_gdim);
         DEBUG_OUT("finding local entries for req_id %i.\n", req_id);
@@ -2169,6 +2192,8 @@ static int get_query_odscs(dspaces_provider_t server, odsc_gdim_t *query,
 
     odsc_curr = *results = malloc(sizeof(**results) * total_odscs);
 
+    if(peer_num == 0)
+        peer_num = 1;
     for(i = 0; i < peer_num; i++) {
         if(odsc_nums[i] == 0) {
             continue;
