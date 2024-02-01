@@ -27,6 +27,8 @@ service Greeter {
   rpc SayHello (HelloRequest) returns (HelloReply) {}
 
   rpc SayHelloStreamReply (HelloRequest) returns (stream HelloReply) {}
+
+  rpc SharedSpaceQuery (SharedSpaceInfoRequest) returns (SharedSpaceInfoReply) {}
 }
 
 // The request message containing the user's name.
@@ -38,3 +40,13 @@ message HelloRequest {
 message HelloReply {
   string message = 1;
 }
+
+message SharedSpaceInfoRequest {
+}
+
+message SharedSpaceInfoReply {
+  bytes header = 1;
+  string check = 2;
+}
+
+

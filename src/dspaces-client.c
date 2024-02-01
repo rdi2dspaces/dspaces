@@ -108,6 +108,7 @@ struct dspaces_client {
     hg_id_t sub_id;
     hg_id_t notify_id;
     hg_id_t do_ops_id;
+    grpc_client_t grpc;
     struct dc_gspace *dcg;
     char **server_address;
     char **node_names;
@@ -695,8 +696,8 @@ int dspaces_init_mpi(MPI_Comm comm, dspaces_client_t *c)
     dspaces_init_margo(client, listen_addr_str);
     free(listen_addr_str);
 
-    grpc_client_t gclient = dspaces_grpc_client_init("localhost:1025");
-    char *reply = dspaces_grpc_client_send_msg(gclient, "dataspaces");
+    client->grpc = dspaces_grpc_client_init("127.0.0.1:1025");
+    char *reply = dspaces_grpc_client_send_msg(client->grpc, "dataspaces stuff");
     fprintf(stdout, "grpc reply: %s\n", reply);
     free(reply);
 
@@ -828,6 +829,7 @@ int dspaces_fini(dspaces_client_t client)
     free(client->dcg);
 
     margo_finalize(client->mid);
+    dspaces_grpc_client_del(client->grpc);
 
     free(client);
 

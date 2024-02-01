@@ -2,6 +2,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include "rpc/dspaces.grpc.pb.h"
+#include "data_services.h"
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -12,26 +13,50 @@ using grpc::ClientContext;
 using dspaces::Greeter;
 using dspaces::HelloReply;
 using dspaces::HelloRequest;
+using dspaces::SharedSpaceInfoRequest;
+using dspaces::SharedSpaceInfoReply;
 
 // Logic and data behind the server's behavior.
 class GreeterServiceImpl final : public Greeter::Service {
-  Status SayHello(ServerContext* context, const HelloRequest* request,
+    public:
+    GreeterServiceImpl(dspaces_service_t dsrv) :
+        dsrv_(dsrv) {
+    };
+
+    private:
+    dspaces_service_t dsrv_;
+
+    Status SayHello(ServerContext* context, const HelloRequest* request,
                   HelloReply* reply) override {
-    std::string prefix("Hello ");
-    std::cout << "received " << request->name() << std::endl;
-    reply->set_message(prefix + request->name());
-    return Status::OK;
-  }
+        std::string prefix("Hello ");
+        std::cout << "received " << request->name() << std::endl;
+        reply->set_message(prefix + request->name());
+        return Status::OK;
+    }
+
+    Status SharedSpaceQuery(ServerContext *context, const SharedSpaceInfoRequest *request, SharedSpaceInfoReply *reply) override {
+        void *obj_hdr;
+        unsigned int len;
+        char *check_str;
+        get_sspace_info(dsrv_, &obj_hdr, &len, &check_str);
+        reply->set_header(std::string((char *)obj_hdr, len));
+        reply->set_check(std::string(check_str));
+        free(obj_hdr);
+        free(check_str);
+        return Status::OK;    
+    }
 };
 
-typedef struct grpc_server {
+typedef struct GRPCServer {
+    GRPCServer(dspaces_service_t dsrv):
+        service(dsrv) {};
     std::unique_ptr<Server> server;
     GreeterServiceImpl service;
 } *grpc_server_t;
 
-extern "C" struct grpc_server *dspaces_grpc_server_init(const char *addr)
+extern "C" struct GRPCServer *dspaces_grpc_server_init(const char *addr, dspaces_service_t dsrv)
 {
-    struct grpc_server *self = new struct grpc_server;
+    struct GRPCServer *self = new struct GRPCServer(dsrv);
     std::string server_address(addr);
     ServerBuilder builder;
 

@@ -71,6 +71,9 @@ struct remote {
 struct dspaces_provider {
     struct list_head dirs;
     margo_instance_id mid;
+#ifdef DSPACES_USE_GRPC
+    grpc_server_t grpc;
+#endif
     hg_id_t put_id;
     hg_id_t put_local_id;
     hg_id_t put_meta_id;
@@ -89,9 +92,10 @@ struct dspaces_provider {
     hg_id_t notify_id;
     hg_id_t do_ops_id;
     struct ds_gspace *dsg;
+    dspaces_service_t dsrv;
     char **server_address;
     char **node_names;
-    char *listen_addr_str_hcp;
+    char *listen_addr_str_hpc;
     int rank;
     int comm_size;
     int f_debug;
@@ -532,7 +536,7 @@ static int write_conf(dspaces_provider_t server, MPI_Comm comm)
             fprintf(fd, "%s %s\n", server->node_names[i],
                     server->server_address[i]);
         }
-        fprintf(fd, "%s\n", server->listen_addr_str);
+        fprintf(fd, "%s\n", server->listen_addr_str_hpc);
 #ifdef HAVE_DRC
         fprintf(fd, "%" PRIu32 "\n", server->drc_credential_id);
 #endif
@@ -955,7 +959,7 @@ static void drain_thread(void *arg)
     }
 }
 
-int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
+int dspaces_server_init(const char *listen_addr_str_hpc, MPI_Comm comm,
                         const char *conf_file, dspaces_provider_t *sv)
 {
     const char *envdebug = getenv("DSPACES_DEBUG");
@@ -1001,9 +1005,6 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     MPI_Comm_rank(comm, &server->rank);
 
     config_server(server, conf_file);
-
-
-    dspaces_grpc_server_init("localhost:1025");
 
     margo_set_environment(NULL);
     sprintf(margo_conf,
@@ -1059,11 +1060,11 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
         }
     }
 
-    server->mid = margo_init_ext(listen_addr_str, MARGO_SERVER_MODE, &mii);
+    server->mid = margo_init_ext(listen_addr_str_hpc, MARGO_SERVER_MODE, &mii);
 
 #else
 
-    server->mid = margo_init_ext(listen_addr_str, MARGO_SERVER_MODE, &mii);
+    server->mid = margo_init_ext(listen_addr_str_hpc, MARGO_SERVER_MODE, &mii);
     if(server->f_debug) {
         if(!server->rank) {
             char *margo_json = margo_get_config(server->mid);
@@ -1080,7 +1081,7 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
         fprintf(stderr, "ERROR: %s: margo_init() failed.\n", __func__);
         return (dspaces_ERR_MERCURY);
     }
-    server->listen_addr_str = strdup(listen_addr_str);
+    server->listen_addr_str_hpc = strdup(listen_addr_str_hpc);
 
     ABT_mutex_create(&server->odsc_mutex);
     ABT_mutex_create(&server->ls_mutex);
@@ -1223,7 +1224,7 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     for(i = 0; i < server->nremote; i++) {
         DEBUG_OUT("initializing client connection to %s\n",
                   server->remotes[i].name);
-        dspaces_init_wan(listen_addr_str,
+        dspaces_init_wan(listen_addr_str_hpc,
                          server->remotes[i].addr_str, 0, &server->remotes[i].conn);
     }
 
@@ -1254,6 +1255,12 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     if(server->priv_ip) {
         DEBUG_OUT("private IP is %s\n", server->priv_ip);
     }
+
+    server->dsrv = dsrv_create(server->dsg, &ds_conf)
+
+#ifdef DSPACES_USE_GRPC
+    server->grpc = dspaces_grpc_server_init("localhost:1025", dsrv);
+#endif
 
     *sv = server;
 
@@ -1352,7 +1359,7 @@ static int server_destroy(dspaces_provider_t server)
     free(server->dsg);
     free(server->server_address[0]);
     free(server->server_address);
-    free(server->listen_addr_str);
+    free(server->listen_addr_str_hpc);
 
     MPI_Barrier(server->comm);
     MPI_Comm_free(&server->comm);
@@ -2611,6 +2618,8 @@ void dspaces_server_fini(dspaces_provider_t server)
 {
     DEBUG_OUT("waiting for finalize to occur\n");
     margo_wait_for_finalize(server->mid);
+    dspaces_grpc_server_wait(server->grpc);
+    dspaces_grpc_server_del(server->grpc);
     free(server);
 }
 

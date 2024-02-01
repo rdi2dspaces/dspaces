@@ -1,9 +1,11 @@
 #ifndef _DSPACES_GRPC_WRAPPER_
 #define _DSPACES_GRPC_WRAPPER_
 
+#include "data_services.h"
+
 typedef void *grpc_server_t;
 
-grpc_server_t dspaces_grpc_server_init(const char *addr);
+struct GRPCServer *dspaces_grpc_server_init(const char *addr, dspaces_service_t dsrv);
 
 void dspaces_grpc_server_wait(grpc_server_t self);
 

@@ -34,7 +34,7 @@ set (dspaces-pkg "share/cmake/dspaces")
 set (dspaces-vers "${dspaces_VERSION_MAJOR}.${dspaces_VERSION_MINOR}")
 
 # list of source files
-set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c dspaces-ops.c)
+set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c dspaces-ops.c data_services.c)
 if(DSPACES_USE_GRPC)
     list(APPEND dspaces-src rpc/wrapper_grpc.cpp
         ${ds_grpc_srcs}
