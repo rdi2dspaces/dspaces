@@ -197,6 +197,59 @@ PyObject *wrapper_dspaces_get(PyObject *clientppy, const char *name,
     return (arr);
 }
 
+PyObject *wrapper_dspaces_pexec(PyObject *clientppy, const char *name,
+				int version, PyObject *lbt, PyObject *ubt,
+				PyObject *fn, const char *fn_name)
+{
+    dspaces_client_t *clientp = PyLong_AsVoidPtr(clientppy);
+    PyObject *item;
+    int ndim = 0;
+    uint64_t *lb, *ub;
+    void *data;
+    int data_size;
+    PyObject *result;
+    int i;
+
+    if(lbt == Py_None || ubt == Py_None) {
+        if (lbt != ubt) {
+            PyErr_SetString(PyExc_TypeError, "both lb and ub must be set or neither");
+            return(NULL);
+        }
+    } else if(PyTuple_GET_SIZE(lbt) != PyTuple_GET_SIZE(ubt)) {
+        PyErr_SetString(PyExc_TypeError, "lb and ub must have the same lenght");
+        return(NULL);
+    } else {
+        ndim = PyTuple_GET_SIZE(lbt);
+    }
+
+    lb = malloc(sizeof(*lb) * ndim);
+    ub = malloc(sizeof(*ub) * ndim);
+    for(i = 0; i < ndim; i++) {
+        item = PyTuple_GetItem(lbt, i);
+        lb[i] = PyLong_AsLong(item);
+        item = PyTuple_GetItem(ubt, i);
+        ub[i] = PyLong_AsLong(item);
+    }
+
+    if(!PyBytes_Check(fn)) {
+         PyErr_SetString(PyExc_TypeError, "fn must be serialized as a a byte string");
+         return(NULL);
+    }
+
+    dspaces_pexec(*clientp, name, version, ndim, lb, ub, PyBytes_AsString(fn), PyBytes_Size(fn)+1, fn_name, &data, &data_size);
+
+    free(lb);
+    free(ub);
+
+    if(data_size > 0) { 
+        result = PyBytes_FromStringAndSize(data, data_size);
+    } else {
+        result = Py_None;
+    }
+
+    return(result);
+}
+
 void wrapper_dspaces_define_gdim(PyObject *clientppy, const char *name, PyObject *gdimt)
 {
     dspaces_client_t *clientp = PyLong_AsVoidPtr(clientppy);
