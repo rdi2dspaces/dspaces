@@ -226,3 +226,111 @@ void free_nv_pairs(struct name_value_pair *pairs)
         free(p);
     }
 }
+
+/* Parse the contents of /proc/meminfo (in buf), return value of "name"
+ * (example: "MemTotal:")
+ * Returns -errno if the entry cannot be found. */
+static long long get_entry(const char* name, const char* buf)
+{
+    char* hit = strstr(buf, name);
+    if (hit == NULL) {
+        return -ENODATA;
+    }
+
+    errno = 0;
+    long long val = strtoll(hit + strlen(name), NULL, 10);
+    if (errno != 0) {
+        int strtoll_errno = errno;
+        fprintf(stderr, "%s: strtol() failed: %s", __func__, strerror(errno));
+        return -strtoll_errno;
+    }
+    return val;
+}
+
+/* Like get_entry(), but exit if the value cannot be found */
+static long long get_entry_fatal(const char* name, const char* buf)
+{
+    long long val = get_entry(name, buf);
+    if (val < 0) {
+        fprintf(stderr, "%s: fatal error, could not find entry '%s' in /proc/meminfo: %s\n", __func__,
+                name, strerror((int)-val));
+        exit(dspaces_ERR_UTILS);
+    }
+    return val;
+}
+
+/* If the kernel does not provide MemAvailable (introduced in Linux 3.14),
+ * approximate it using other data we can get */
+static long long available_guesstimate(const char* buf)
+{
+    long long Cached = get_entry_fatal("Cached:", buf);
+    long long MemFree = get_entry_fatal("MemFree:", buf);
+    long long Buffers = get_entry_fatal("Buffers:", buf);
+    long long Shmem = get_entry_fatal("Shmem:", buf);
+
+    return MemFree + Cached + Buffers - Shmem;
+}
+
+/* Parse /proc/meminfo.
+ * This function either returns valid data or kills the process
+ * with a fatal error.
+ */
+meminfo_t parse_meminfo()
+{
+    // Note that we do not need to close static FDs that we ensure to
+    // `fopen()` maximally once.
+    static FILE* fd;
+    static int guesstimate_warned = 0;
+    // On Linux 5.3, "wc -c /proc/meminfo" counts 1391 bytes.
+    // 8192 should be enough for the foreseeable future.
+    char buf[8192] = { 0 };
+    meminfo_t m = { 0 };
+
+    if (fd == NULL) {
+        char buf[MEM_PATH_LEN] = { 0 };
+        snprintf(buf, sizeof(buf), "%s/%s", "/proc", "meminfo");
+        fd = fopen(buf, "r");
+    }
+    if (fd == NULL) {
+        fprintf(stderr, "could not open /proc/meminfo: %s\n", strerror(errno));
+    }
+    rewind(fd);
+
+    size_t len = fread(buf, 1, sizeof(buf) - 1, fd);
+    if (ferror(fd)) {
+        fprintf(stderr, "could not read /proc/meminfo: %s\n", strerror(errno));
+    }
+    if (len == 0) {
+        fprintf(stderr, "could not read /proc/meminfo: 0 bytes returned\n");
+    }
+
+    m.MemTotalKiB = get_entry_fatal("MemTotal:", buf);
+    m.SwapTotalKiB = get_entry_fatal("SwapTotal:", buf);
+    long long SwapFree = get_entry_fatal("SwapFree:", buf);
+
+    long long MemAvailable = get_entry("MemAvailable:", buf);
+    if (MemAvailable < 0) {
+        MemAvailable = available_guesstimate(buf);
+        if (guesstimate_warned == 0) {
+            fprintf(stderr, "Warning: Your kernel does not provide MemAvailable data (needs 3.14+)\n"
+                            "         Falling back to guesstimate\n");
+            guesstimate_warned = 1;
+        }
+    }
+
+    // Calculate percentages
+    m.MemAvailablePercent = (double)MemAvailable * 100 / (double)m.MemTotalKiB;
+    if (m.SwapTotalKiB > 0) {
+        m.SwapFreePercent = (double)SwapFree * 100 / (double)m.SwapTotalKiB;
+    } else {
+        m.SwapFreePercent = 0;
+    }
+
+    // Convert kiB to MiB
+    m.MemTotalMiB = m.MemTotalKiB / 1024;
+    m.MemAvailableMiB = MemAvailable / 1024;
+    m.SwapTotalMiB = m.SwapTotalKiB / 1024;
+    m.SwapFreeMiB = SwapFree / 1024;
+
+    return m;
+}

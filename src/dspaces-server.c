@@ -139,6 +139,7 @@ struct dspaces_provider {
     hg_id_t get_var_objs_id;
     int nmods;
     struct dspaces_module *mods;
+    hg_id_t put_dc_id;
     struct ds_gspace *dsg;
     char **server_address;
     char **node_names;
@@ -160,6 +161,7 @@ struct dspaces_provider {
     ABT_mutex dht_mutex;
     ABT_mutex sspace_mutex;
     ABT_mutex kill_mutex;
+    ABT_mutex dc_mutex;
 
     ABT_xstream drain_xstream;
     ABT_pool drain_pool;
@@ -191,6 +193,7 @@ DECLARE_MARGO_RPC_HANDLER(pexec_rpc)
 DECLARE_MARGO_RPC_HANDLER(cond_rpc)
 DECLARE_MARGO_RPC_HANDLER(get_vars_rpc);
 DECLARE_MARGO_RPC_HANDLER(get_var_objs_rpc);
+DECLARE_MARGO_RPC_HANDLER(put_dc_rpc)
 
 static void put_rpc(hg_handle_t h);
 static void put_local_rpc(hg_handle_t h);
@@ -203,6 +206,7 @@ static void odsc_internal_rpc(hg_handle_t h);
 static void ss_rpc(hg_handle_t h);
 static void kill_rpc(hg_handle_t h);
 static void sub_rpc(hg_handle_t h);
+static void put_dc_rpc(hg_handle_t h);
 static void do_ops_rpc(hg_handle_t h);
 static void pexec_rpc(hg_handle_t h);
 static void cond_rpc(hg_handle_t h);
@@ -723,6 +727,7 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
     dsg_l->num_apps = ds_conf.num_apps;
 
     INIT_LIST_HEAD(&dsg_l->obj_desc_drain_list);
+    INIT_LIST_HEAD(&dsg_l->dc_req_list);
 
     server->dsg = dsg_l;
     return 0;
@@ -1078,9 +1083,9 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     hg_bool_t flag;
     hg_id_t id;
     int num_handlers = DSPACES_DEFAULT_NUM_HANDLERS;
-    struct hg_init_info hii = {0};
+    struct hg_init_info hii = HG_INIT_INFO_INITIALIZER;
     char margo_conf[1024];
-    struct margo_init_info mii = {0};
+    struct margo_init_info mii = MARGO_INIT_INFO_INITIALIZER;
     int i, ret;
 
     if(is_initialized) {
@@ -1121,7 +1126,7 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
             "{ \"use_progress_thread\" : true, \"rpc_thread_count\" : %d }",
             num_handlers);
     hii.request_post_init = 1024;
-    hii.auto_sm = 0;
+    hii.auto_sm = false;    
     mii.hg_init_info = &hii;
     mii.json_config = margo_conf;
     ABT_init(0, NULL);
@@ -1156,7 +1161,6 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     drc_cookie = drc_get_first_cookie(drc_credential_info);
     sprintf(drc_key_str, "%u", drc_cookie);
 
-    memset(&hii, 0, sizeof(hii));
     hii.na_init_info.auth_key = drc_key_str;
 
     /* rank 0 grants access to the credential, allowing other jobs to use it */
@@ -1198,6 +1202,7 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     ABT_mutex_create(&server->dht_mutex);
     ABT_mutex_create(&server->sspace_mutex);
     ABT_mutex_create(&server->kill_mutex);
+    ABT_mutex_create(&server->dc_mutex);
 
     hg = margo_get_class(server->mid);
 
@@ -1271,6 +1276,8 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
                               &server->get_var_objs_id, &flag);
         DS_HG_REGISTER(hg, server->get_var_objs_id, get_var_objs_in_t, odsc_hdr,
                        get_var_objs_rpc);
+        margo_registered_name(server->mid, "put_dc_rpc", &server->put_dc_id, &flag);
+        DS_HG_REGISTER(hg, server->put_dc_id, dc_bulk_gdim_t, bulk_out_t, put_dc_rpc);
     } else {
         server->put_id = MARGO_REGISTER(server->mid, "put_rpc", bulk_gdim_t,
                                         bulk_out_t, put_rpc);
@@ -1361,6 +1368,9 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
                            odsc_hdr, get_var_objs_rpc);
         margo_register_data(server->mid, server->get_var_objs_id,
                             (void *)server, NULL);
+        server->put_dc_id = MARGO_REGISTER(server->mid, "put_dc_rpc", dc_bulk_gdim_t,
+                                        bulk_out_t, put_dc_rpc);
+        margo_register_data(server->mid, server->put_dc_id, (void *)server, NULL);
     }
     int err = dsg_alloc(server, conf_file, comm);
     if(err) {
@@ -1644,6 +1654,195 @@ static void put_rpc(hg_handle_t handle)
     DEBUG_OUT("Finished obj_put_update from put_rpc\n");
 }
 DEFINE_MARGO_RPC_HANDLER(put_rpc)
+
+static void put_dc_rpc(hg_handle_t handle)
+{
+    hg_return_t hret;
+    dc_bulk_gdim_t in;
+    bulk_out_t out;
+    hg_bulk_t bulk_handle;
+
+    margo_instance_id mid = margo_hg_handle_get_instance(handle);
+
+    const struct hg_info *info = margo_get_info(handle);
+    dspaces_provider_t server =
+        (dspaces_provider_t)margo_registered_data(mid, info->id);
+
+    if(server->f_kill == 0) {
+        fprintf(stderr, "WARNING: put rpc received when server is finalizing. "
+                        "This will likely cause problems...\n");
+    }
+
+    hret = margo_get_input(handle, &in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr,
+                "DATASPACES: ERROR handling %s: margo_get_input() failed with "
+                "%d.\n",
+                __func__, hret);
+        margo_destroy(handle);
+        return;
+    }
+
+    obj_descriptor in_odsc;
+    memcpy(&in_odsc, in.odsc.raw_odsc, sizeof(in_odsc));
+    // set the owner to be this server address
+    hg_addr_t owner_addr;
+    size_t owner_addr_size = 128;
+
+    margo_addr_self(server->mid, &owner_addr);
+    margo_addr_to_string(server->mid, in_odsc.owner, &owner_addr_size,
+                         owner_addr);
+    margo_addr_free(server->mid, owner_addr);
+
+    int f_first_channel = 0;
+    struct dc_request *dc_req;
+    struct obj_data *od;
+    // check if there is an dual channel request in the list; if not, create one as the place holder
+    ABT_mutex_lock(server->dc_mutex);
+    dc_req = dc_req_find(&server->dsg->dc_req_list, &in_odsc);
+    if(dc_req == NULL) {
+        od = obj_data_alloc(&in_odsc);
+        if(!od) {
+            fprintf(stderr, "ERROR: (%s): object allocation failed!\n", __func__);
+        }
+        memcpy(&od->gdim, in.odsc.raw_gdim, sizeof(struct global_dimension));
+        dc_req = dc_req_alloc(od);
+        if(!dc_req) {
+            fprintf(stderr, "ERROR: (%s): dc_req allocation failed!\n", __func__);
+        }
+        list_add(&dc_req->entry, &server->dsg->dc_req_list);
+        f_first_channel = 1;
+    } else {
+        od = dc_req->od;
+    } 
+    ABT_mutex_unlock(server->dc_mutex);
+
+    if(dc_req->f_error && !f_first_channel) {
+        fprintf(stderr, "ERROR: (%s): 1 of 2 channel failed!\n", __func__);
+        out.ret = dspaces_ERR_MERCURY;
+        obj_data_free(dc_req->od);
+        list_del(&dc_req->entry);
+        dc_req_free(dc_req);
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_destroy(handle);
+        return;
+    }
+
+    // do write lock
+
+    //hg_size_t bulk_size = (in_odsc.size) * bbox_volume(&(in_odsc.bb));
+    size_t rdma_size = in.rdma_size;
+    size_t offset = in.offset;
+    void *data_ptr = od->data + offset;
+
+    hret = margo_bulk_create(mid, 1, (void **)&(data_ptr), &rdma_size,
+                                HG_BULK_WRITE_ONLY, &bulk_handle);
+
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_bulk_create failed!\n", __func__);
+        out.ret = dspaces_ERR_MERCURY;
+        obj_data_free(dc_req->od);
+        dc_req->f_error = 1;
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_destroy(handle);
+        return;
+    }
+
+    margo_request *bulk_req;
+    if(in.channel == 0) {
+        /* gdr */
+        bulk_req = &dc_req->margo_req[0];
+    } else if(in.channel == 1) {
+        /* host */
+        bulk_req = &dc_req->margo_req[1];
+    } else {
+        /* error */
+        fprintf(stderr, "ERROR: (%s): invalid in.channel!\n", __func__);
+        out.ret = dspaces_ERR_MERCURY;
+        dc_req->f_error = 1;
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_bulk_free(bulk_handle);
+        margo_destroy(handle);
+        return;
+    }
+
+    hret = margo_bulk_itransfer(mid, HG_BULK_PULL, info->addr, in.handle, 0,
+                               bulk_handle, 0, rdma_size, bulk_req);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_bulk_transfer failed!\n", __func__);
+        out.ret = dspaces_ERR_MERCURY;
+        obj_data_free(dc_req->od);
+        dc_req->f_error = 1;
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_bulk_free(bulk_handle);
+        margo_destroy(handle);
+        return;
+    }
+
+    size_t req_idx;
+    if(!f_first_channel) {
+        // if either of the req is not init by margo_bulk_itransfer(), yield
+        while(dc_req->margo_req[0] == MARGO_REQUEST_NULL || dc_req->margo_req[1] == MARGO_REQUEST_NULL) {
+            ABT_thread_yield();
+        }
+        do {
+            hret = margo_wait_any(2, dc_req->margo_req, &req_idx);
+            if(req_idx < 2) {
+                dc_req->margo_req[req_idx] = MARGO_REQUEST_NULL;
+            }
+            if(hret != HG_SUCCESS) {
+                if(req_idx == 0) {
+                    fprintf(stderr, "ERROR: (%s): margo_wait gdr_req failed!, hret = %d\n", __func__, hret);
+                } else if(req_idx == 1) {
+                    fprintf(stderr, "ERROR: (%s): margo_wait host_req failed!\n", __func__);
+                } else {
+                    fprintf(stderr, "ERROR: (%s): margo_wait failed!\n", __func__);
+                }
+                dc_req->f_error = 1;
+            }
+        } while (req_idx != 2);
+
+        // final error check
+        if(dc_req->f_error) {
+            fprintf(stderr, "ERROR: (%s): 1 of 2 channel failed!\n", __func__);
+            out.ret = dspaces_ERR_MERCURY;
+            obj_data_free(dc_req->od);
+            list_del(&dc_req->entry);
+            dc_req_free(dc_req);
+            margo_respond(handle, &out);
+            margo_free_input(handle, &in);
+            margo_bulk_free(bulk_handle);
+            margo_destroy(handle);
+            return;
+        } else {
+            ABT_mutex_lock(server->ls_mutex);
+            ls_add_obj(server->dsg->ls, od);
+            ABT_mutex_unlock(server->ls_mutex);
+            DEBUG_OUT("Received obj %s\n, 2 channel succeed!", obj_desc_sprint(&od->obj_desc));
+            // dual channel finished, rm the dc entry
+            list_del(&dc_req->entry);
+            dc_req_free(dc_req);
+        }
+
+    }
+
+    // now update the dht
+    out.ret = dspaces_SUCCESS;
+    margo_bulk_free(bulk_handle);
+    margo_respond(handle, &out);
+    margo_free_input(handle, &in);
+    margo_destroy(handle);
+
+    if(!f_first_channel) {
+        obj_update_dht(server, od, DS_OBJ_NEW);
+        DEBUG_OUT("Finished obj_put_update from put_rpc\n");
+    }
+}
+DEFINE_MARGO_RPC_HANDLER(put_dc_rpc)
 
 static void put_local_rpc(hg_handle_t handle)
 {

@@ -4,8 +4,39 @@ if(HAVE_DRC)
     add_definitions( -DHAVE_DRC)
 endif()
 
+# default: No CUDA
+set(HAVE_CUDA FALSE)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.17)
+    find_package(CUDAToolkit)
+    if(CUDAToolkit_FOUND)
+        enable_language(CUDA)
+        include_directories(${CUDAToolkit_INCLUDE_DIRS})
+        set(HAVE_CUDA TRUE)
+    endif()
+else()
+    find_package(CUDA)
+    if(CUDA_FOUND)
+        enable_language(CUDA)
+        include_directories(${CUDA_INCLUDE_DIRS})
+        set(HAVE_CUDA TRUE)
+    endif()
+endif()
+
+if(HAVE_CUDA)
+    find_package(GDRCOPY)
+    if(HAVE_GDRCOPY)
+        include_directories(${GDRCOPY_INCLUDE_DIRS})
+        add_definitions(-DHAVE_GDRCOPY)
+    endif()
+endif()
+
 # list of source files
-set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c dspaces-ops.c)
+if(HAVE_CUDA)
+    set(dspaces-src util.c bbox.c ssd_copy.cu ss_data_cuda.c ss_data.c dspaces-client.c dspaces-ops.c)
+    set_source_files_properties(ssd_copy.cu PROPERTIES LANGUAGE "CUDA")
+else()
+    set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c dspaces-ops.c)
+endif()
 
 # load package helper for generating cmake CONFIG packages
 include (CMakePackageConfigHelpers)
@@ -16,13 +47,61 @@ set (dspaces-pkg "share/cmake/dspaces")
 set (dspaces-vers "${dspaces_VERSION_MAJOR}.${dspaces_VERSION_MINOR}")
 
 add_library(dspaces ${dspaces-src})
-if(HAVE_DRC)
-    target_link_libraries (dspaces margo m pthread ${DRC_LIBRARIES} liblz4)
-    target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${DRC_INCLUDE_DIRS})
-else()
-    target_link_libraries (dspaces margo m pthread liblz4)
-    target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include>)
+if(HAVE_CUDA)
+    set_target_properties(dspaces PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 endif()
+
+# We need both cuda driver and cuda runtime headers and libs
+# ${CUDA_LIBRARIES} returned by find_package(CUDA) only has the cuda runtime libs
+# so we have to manually add -lcuda
+
+target_link_libraries (dspaces margo m pthread)
+target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include>)
+
+if(HAVE_DRC)
+    target_link_libraries (dspaces ${DRC_LIBRARIES})
+    target_include_directories (dspaces PUBLIC ${DRC_INCLUDE_DIRS})
+endif()
+
+if(HAVE_CUDA)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.17)
+        target_link_libraries (dspaces CUDA::cudart CUDA::cuda_driver)
+        target_include_directories (dspaces PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
+    else()
+        target_link_libraries (dspaces cuda ${CUDA_LIBRARIES})
+        target_include_directories (dspaces PUBLIC ${CUDA_INCLUDE_DIRS})
+    endif()
+
+    if(HAVE_GDRCOPY)
+        target_link_libraries (dspaces ${GDRCOPY_LIBRARIES})
+        target_include_directories (dspaces PUBLIC ${GDRCOPY_INCLUDE_DIRS})
+    endif()
+endif()
+
+
+
+# if(HAVE_DRC)
+#     target_link_libraries (dspaces margo m pthread ${DRC_LIBRARIES})
+#     target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${DRC_INCLUDE_DIRS})
+# else()
+#     if(HAVE_GDRCOPY)
+#         if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.17)
+#             target_link_libraries (dspaces margo m pthread CUDA::cudart CUDA::cuda_driver ${GDRCOPY_LIBRARIES})
+#             target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${CUDAToolkit_INCLUDE_DIRS} ${GDRCOPY_INCLUDE_DIRS})
+#         else()
+#             target_link_libraries (dspaces margo m pthread cuda ${CUDA_LIBRARIES} ${GDRCOPY_LIBRARIES})
+#             target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${CUDA_INCLUDE_DIRS} ${GDRCOPY_INCLUDE_DIRS})
+#         endif()
+#     else()
+#         if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.17)
+#             target_link_libraries (dspaces margo m pthread CUDA::cudart CUDA::cuda_driver)
+#             target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${CUDAToolkit_INCLUDE_DIRS})
+#         else()
+#             target_link_libraries (dspaces margo m pthread cuda ${CUDA_LIBRARIES})
+#             target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include> ${CUDA_INCLUDE_DIRS})
+#         endif()
+#     endif()
+# endif()
 
 # local include's BEFORE, in case old incompatable .h files in prefix/include
 target_include_directories (dspaces BEFORE PUBLIC

@@ -44,28 +44,10 @@
 #include "queue.h"
 #include <errno.h>
 #include <math.h>
+#include "dspaces-common.h"
+#include <cuda_runtime_api.h>
 
 #include <abt.h>
-
-/*
-  A view in  the matrix allows to extract any subset  of values from a
-  matrix.
-*/
-
-struct matrix_view {
-    uint64_t lb[BBOX_MAX_NDIM];
-    uint64_t ub[BBOX_MAX_NDIM];
-};
-
-/* Generic matrix representation. */
-struct matrix {
-    uint64_t dist[BBOX_MAX_NDIM];
-    int num_dims;
-    size_t size_elem;
-    enum storage_type mat_storage;
-    struct matrix_view mat_view;
-    void *pdata;
-};
 
 /*
   Cache structure to "map" a bounding box to corresponding nodes in
@@ -601,9 +583,9 @@ int ssd_hash_v2(struct sspace *ss, const struct bbox *bb,
     return num_nodes;
 }
 
-static void matrix_init(struct matrix *mat, enum storage_type st,
-                        struct bbox *bb_glb, struct bbox *bb_loc, void *pdata,
-                        size_t se)
+void matrix_init(struct matrix *mat, enum storage_type st,
+                 struct bbox *bb_glb, struct bbox *bb_loc, void *pdata,
+                 size_t se)
 {
     int i;
     int ndims = bb_glb->num_dims;
@@ -1978,4 +1960,42 @@ char **addr_str_buf_to_list(char *buf, int num_addrs)
         ret[i] = a + strlen(a) + 1;
     }
     return ret;
+}
+
+struct dc_request *dc_req_alloc(struct obj_data *od)
+{
+    struct dc_request *dc_req = (struct dc_request*) malloc(sizeof(struct dc_request));
+    if(!dc_req) {
+        fprintf(stderr, "Malloc dc_req error\n");
+        return NULL;
+    }
+    memset(dc_req, 0, sizeof(struct dc_request));
+    
+    dc_req->margo_req = (margo_request *) malloc(2*sizeof(margo_request));
+    for(int i=0; i<2; i++) {
+        dc_req->margo_req[i] = MARGO_REQUEST_NULL;
+    }
+    dc_req->od = od;
+    dc_req->f_error = 0;
+    return dc_req;
+}
+struct dc_request *dc_req_find(struct list_head *dc_req_list, obj_descriptor *odsc)
+{
+    if(!dc_req_list) {
+        return NULL;
+    }
+    struct dc_request *e;
+    list_for_each_entry(e, dc_req_list, struct dc_request, entry)
+    {
+        if(obj_desc_equals_no_owner(odsc, &e->od->obj_desc))
+            return e;
+    }
+
+    return NULL;
+}
+
+void dc_req_free(struct dc_request *dc_req)
+{
+    free(dc_req->margo_req);
+    free(dc_req);
 }

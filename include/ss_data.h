@@ -22,6 +22,9 @@
 
 #include <abt.h>
 
+#include <cuda.h>
+#include <cuda_runtime_api.h>
+
 #define MAX_VERSIONS 10
 
 #define DS_CLIENT_STORAGE 0x01
@@ -81,6 +84,35 @@ struct obj_data {
 
     /* Flag to mark if we should free this data object. */
     unsigned int f_free : 1;
+};
+
+struct dc_request {
+    struct list_head entry;
+    struct obj_data* od;
+    /* margo request for bulk_itransfer(); 0 - gdr; 1 - host */
+    margo_request * margo_req;
+    hg_bulk_t* bulk_handle;
+    int f_error;
+};
+
+/*
+  A view in  the matrix allows to extract any subset  of values from a
+  matrix.
+*/
+
+struct matrix_view {
+    uint64_t lb[BBOX_MAX_NDIM];
+    uint64_t ub[BBOX_MAX_NDIM];
+};
+
+/* Generic matrix representation. */
+struct matrix {
+    uint64_t dist[BBOX_MAX_NDIM];
+    int num_dims;
+    size_t size_elem;
+    enum storage_type mat_storage;
+    struct matrix_view mat_view;
+    void *pdata;
 };
 
 struct gdim_list_entry {
@@ -374,6 +406,9 @@ static inline hg_return_t hg_proc_name_list_t(hg_proc_t proc, void *data)
 }
 
 MERCURY_GEN_PROC(bulk_gdim_t, ((odsc_hdr_with_gdim)(odsc))((hg_bulk_t)(handle)))
+MERCURY_GEN_PROC(dc_bulk_gdim_t, ((odsc_hdr_with_gdim)(odsc))((int32_t)(channel))
+                                    ((hg_size_t)(offset))((hg_size_t)(rdma_size))
+                                    ((hg_bulk_t)(handle)))
 MERCURY_GEN_PROC(bulk_in_t, ((odsc_hdr)(odsc))((hg_bulk_t)(handle)))
 MERCURY_GEN_PROC(bulk_out_t, ((int32_t)(ret))((hg_size_t)(len)))
 MERCURY_GEN_PROC(put_meta_in_t, ((hg_string_t)(name))((int32_t)(length))(
@@ -404,7 +439,11 @@ int ssd_init(struct sspace *, int);
 void ssd_free(struct sspace *);
 //
 
+void matrix_init(struct matrix *, enum storage_type, struct bbox *, struct bbox *, void *, size_t);
+
 int ssd_copy(struct obj_data *, struct obj_data *);
+int ssd_copy_cuda(struct obj_data *, struct obj_data *);
+int ssd_copy_cuda_async(struct obj_data *, struct obj_data *, cudaStream_t *stream);
 //
 long ssh_hash_elem_count(struct sspace *ss, const struct bbox *bb);
 //
@@ -438,12 +477,14 @@ struct obj_data *ls_find_no_version(ss_storage *, obj_descriptor *);
 int ls_get_var_names(ss_storage *, char ***);
 
 struct obj_data *obj_data_alloc(obj_descriptor *);
+struct obj_data *obj_data_alloc_cuda(obj_descriptor *);
 struct obj_data *obj_data_alloc_no_data(obj_descriptor *, void *);
 struct obj_data *obj_data_alloc_with_data(obj_descriptor *, void *);
 
 void meta_data_free(struct meta_data *mdata);
 
 void obj_data_free(struct obj_data *od);
+void obj_data_free_cuda(struct obj_data *od);
 uint64_t obj_data_size(obj_descriptor *);
 void obj_data_resize(obj_descriptor *obj_desc, uint64_t *new_dims);
 
@@ -477,5 +518,9 @@ struct lock_data *get_lock(struct list_head *list, char *name);
 struct lock_data *create_lock(struct list_head *list, char *name);
 
 char **addr_str_buf_to_list(char *buf, int num_addrs);
+
+struct dc_request *dc_req_alloc(struct obj_data *od);
+struct dc_request *dc_req_find(struct list_head *dc_req_list, obj_descriptor *odsc);
+void dc_req_free(struct dc_request *dc_req);
 
 #endif /* __SS_DATA_H_ */
