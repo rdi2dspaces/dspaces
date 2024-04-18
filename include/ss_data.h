@@ -29,6 +29,7 @@
 
 #define DS_CLIENT_STORAGE 0x01
 #define DS_OBJ_RESIZE 0x02
+#define DS_NO_COMPRESS 0x04
 
 typedef struct {
     void *iov_base;
@@ -406,10 +407,8 @@ static inline hg_return_t hg_proc_name_list_t(hg_proc_t proc, void *data)
 }
 
 MERCURY_GEN_PROC(bulk_gdim_t, ((odsc_hdr_with_gdim)(odsc))((hg_bulk_t)(handle)))
-MERCURY_GEN_PROC(dc_bulk_gdim_t, ((odsc_hdr_with_gdim)(odsc))((int32_t)(channel))
-                                    ((hg_size_t)(offset))((hg_size_t)(rdma_size))
-                                    ((hg_bulk_t)(handle)))
-MERCURY_GEN_PROC(bulk_in_t, ((odsc_hdr)(odsc))((hg_bulk_t)(handle)))
+MERCURY_GEN_PROC(bulk_in_t,
+                 ((odsc_hdr)(odsc))((hg_bulk_t)(handle))((uint8_t)(flags)))
 MERCURY_GEN_PROC(bulk_out_t, ((int32_t)(ret))((hg_size_t)(len)))
 MERCURY_GEN_PROC(put_meta_in_t, ((hg_string_t)(name))((int32_t)(length))(
                                     (int32_t)(version))((hg_bulk_t)(handle)))
@@ -475,6 +474,8 @@ struct obj_data *ls_find_od(ss_storage *, obj_descriptor *);
 int ls_find_ods(ss_storage *ls, obj_descriptor *odsc, obj_descriptor ***od_tab);
 struct obj_data *ls_find_no_version(ss_storage *, obj_descriptor *);
 int ls_get_var_names(ss_storage *, char ***);
+int ls_find_all_no_version(ss_storage *ls, const char *var_name,
+                           obj_descriptor ***odscs);
 
 struct obj_data *obj_data_alloc(obj_descriptor *);
 struct obj_data *obj_data_alloc_cuda(obj_descriptor *);
