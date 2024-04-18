@@ -85,7 +85,7 @@ __global__ void copy_subarray_c_short(short *dst, short *src, int dst_nx, int ds
     }
 }
 
-__global__ void copy_subarray_c_double(char *dst, char *src, int dst_nx, int dst_ny, int dst_nz,
+__global__ void copy_subarray_c_char(char *dst, char *src, int dst_nx, int dst_ny, int dst_nz,
     int src_nx, int src_ny, int src_nz, int sub_nx, int sub_ny, int sub_nz)
 {
     //==============================================================================
