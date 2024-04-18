@@ -616,20 +616,69 @@ static int cuda_max_concurrent_kernels_num(int dev_rank)
     return 0;
 }
 
-static int dspaces_init_gpu(dspaces_client_t client)
+static int dspaces_init_gpu(dspaces_client_t client, const char* listen_addr_str)
 {
     int ret = dspaces_SUCCESS;
+    char *class_name = NULL, *protocol_name = NULL;
+    char *input_string = NULL, *token = NULL, *locator = NULL;
+
+    // Parse listen addr to see if it supports GDR
+    // Use the same code as mercury/na/na.c
+
+    input_string = strdup(listen_addr_str);
+
+    /**
+     * Strings can be of the format:
+     *   [<class>+]<protocol>[://[<host string>]]
+     */
+
+    /* Get first part of string (i.e., class_name+protocol) */
+    token = strtok_r(input_string, ":", &locator);
+
+    /* Is class name specified */
+    if (strstr(token, "+") != NULL) {
+        char *_locator = NULL;
+
+        token = strtok_r(token, "+", &_locator);
+
+        /* Get NA class name */
+        class_name = strdup(token);
+
+        /* Get protocol name */
+        protocol_name = strdup(_locator);
+    } else {
+        /* Get protocol name */
+        protocol_name = strdup(token);
+    }
+
+    int gdr_network_support = 0;
+    // Only tested on verbs and cxi.
+    // Others might work, but need to be added later
+    if(strcmp(protocol_name, "verbs") == 0 || strcmp(protocol_name, "cxi") == 0) {
+        gdr_network_support = 1;
+    }
+
+    free(input_string);
+    free(class_name);
+    free(protocol_name);
 
     CUDA_ASSERT_RT_CLIENT(cudaGetDeviceCount(&client->cuda_info.dev_num));
     client->cuda_info.dev_list = (struct dspaces_cuda_dev_info*) malloc(client->cuda_info.dev_num*sizeof(struct dspaces_cuda_dev_info));
     // Get Device Info
     for(int dev_rank=0; dev_rank<client->cuda_info.dev_num; dev_rank++) {
-        CUDA_ASSERT_RT_CLIENT(cudaDeviceGetAttribute(&(client->cuda_info.dev_list[dev_rank].gdr_support), cudaDevAttrGPUDirectRDMASupported, dev_rank));
-        if(client->cuda_info.dev_list[dev_rank].gdr_support) {
-            client->cuda_info.dev_list[dev_rank].cuda_put_mode = 2; // GDR
-            client->cuda_info.dev_list[dev_rank].cuda_get_mode = 2; // GDR
-            DEBUG_OUT("Rank %d: Device = %d/%d, CUDA Put()/Get() mode = GDR.\n",
-                                    client->rank, dev_rank, client->cuda_info.dev_num);
+        if(gdr_network_support) {
+            CUDA_ASSERT_RT_CLIENT(cudaDeviceGetAttribute(&(client->cuda_info.dev_list[dev_rank].gdr_support), cudaDevAttrGPUDirectRDMASupported, dev_rank));
+            if(client->cuda_info.dev_list[dev_rank].gdr_support) {
+                client->cuda_info.dev_list[dev_rank].cuda_put_mode = 2; // GDR
+                client->cuda_info.dev_list[dev_rank].cuda_get_mode = 2; // GDR
+                DEBUG_OUT("Rank %d: Device = %d/%d, CUDA Put()/Get() mode = GDR.\n",
+                                        client->rank, dev_rank, client->cuda_info.dev_num);
+            } else {
+                client->cuda_info.dev_list[dev_rank].cuda_put_mode = 1; // Host-Based
+                client->cuda_info.dev_list[dev_rank].cuda_get_mode = 1; // Host-Based
+                DEBUG_OUT("Rank %d: Device = %d/%d, CUDA Put()/Get() mode = Host-Based.\n",
+                                        client->rank, dev_rank, client->cuda_info.dev_num);
+            }
         } else {
             client->cuda_info.dev_list[dev_rank].cuda_put_mode = 1; // Host-Based
             client->cuda_info.dev_list[dev_rank].cuda_get_mode = 1; // Host-Based
@@ -870,13 +919,13 @@ int dspaces_init(int rank, dspaces_client_t *c)
         return (ret);
     }
 
-    ret = dspaces_init_gpu(client);
-    if(ret != dspaces_SUCCESS) {
+    ret = read_conf(client, &listen_addr_str);
+    if(ret != 0) {
         return (ret);
     }
 
-    ret = read_conf(client, &listen_addr_str);
-    if(ret != 0) {
+    ret = dspaces_init_gpu(client, listen_addr_str);
+    if(ret != dspaces_SUCCESS) {
         return (ret);
     }
 
@@ -910,15 +959,16 @@ int dspaces_init_mpi(MPI_Comm comm, dspaces_client_t *c)
         return (ret);
     }
 
-    ret = dspaces_init_gpu(client);
-    if(ret != dspaces_SUCCESS) {
-        return (ret);
-    }
-
     ret = read_conf_mpi(client, comm, &listen_addr_str);
     if(ret != 0) {
         return (ret);
     }
+
+    ret = dspaces_init_gpu(client, listen_addr_str);
+    if(ret != dspaces_SUCCESS) {
+        return (ret);
+    }
+
     ret = dspaces_init_margo(client, listen_addr_str);
     free(listen_addr_str);
     if(ret != 0) {
