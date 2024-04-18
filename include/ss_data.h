@@ -384,7 +384,7 @@ static inline hg_return_t hg_proc_name_list_t(hg_proc_t proc, void *data)
         if(ret != HG_SUCCESS) {
             break;
         }
-        nlist->names = malloc(sizeof(*nlist->names) * nlist->count);
+        nlist->names = (hg_string_t*)malloc(sizeof(*nlist->names) * nlist->count);
         for(i = 0; i < nlist->count; i++) {
             ret = hg_proc_hg_string_t(proc, &nlist->names[i]);
             if(ret != HG_SUCCESS) {
