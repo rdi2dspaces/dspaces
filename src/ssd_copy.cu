@@ -15,7 +15,7 @@
                 }                                                               \
         } while (0)
 
-#define CUDA_ASSERTRT(stmt)				                                        \
+#define CUDA_ASSERT_RT(stmt)				                                        \
     do                                                                          \
         {                                                                       \
             cudaError_t err = (stmt);                                           \
@@ -202,11 +202,11 @@ extern "C" int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src)
 
     // Use non-parallel design for unit benchmark
     cudaStream_t stream;
-    CUDA_ASSERTRT(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    CUDA_ASSERT_RT(cudaStreamCreateWithFlags(&stream, cudaStreamDefault));
 
     if(dst->num_dims == 1) {
-        BLOCK_SIZE_X = 256; 
-        BLOCK_SIZE_Y = 4;
+        BLOCK_SIZE_X = 1024; 
+        BLOCK_SIZE_Y = 1;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = 1;
@@ -214,7 +214,7 @@ extern "C" int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src)
         dst_off = dst->mat_view.lb[0];
         src_off = src->mat_view.lb[0];
     } else if(dst->num_dims == 2) {
-        BLOCK_SIZE_X = 16;
+        BLOCK_SIZE_X = 32;
         BLOCK_SIZE_Y = 32;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
@@ -224,9 +224,9 @@ extern "C" int matrix_copy_cuda_f_double(struct matrix *dst, struct matrix *src)
         src_off = src->mat_view.lb[1] * src->dist[0] + src->mat_view.lb[0];
     } else { 
         // ndims >= 3 will use 3D kernel in loops, so the params are the same
-        BLOCK_SIZE_X = 8;
+        BLOCK_SIZE_X = 16;
         BLOCK_SIZE_Y = 8;
-        BLOCK_SIZE_Z = 16;
+        BLOCK_SIZE_Z = 8;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = dst->mat_view.ub[1] - dst->mat_view.lb[1] + 1;
         sub_nz = dst->mat_view.ub[2] - dst->mat_view.lb[2] + 1;
@@ -326,7 +326,7 @@ ndim10:
                                 copy_subarray_f_double<<<dimgrid, dimblock, 0, stream>>>(&d[dst_off],
                                     &s[src_off], dst->dist[0], dst->dist[1], dst->dist[2],
                                     src->dist[0], src->dist[1], src->dist[2], sub_nx, sub_ny, sub_nz);
-                                CUDA_ASSERTRT(cudaStreamSynchronize(stream));
+                                CUDA_ASSERT_RT(cudaStreamSynchronize(stream));
                                 if(src->num_dims <= 3)
                                     return dspaces_SUCCESS;
                             }
@@ -373,11 +373,11 @@ extern "C" int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src)
 
     // Use non-parallel design for unit benchmark
     cudaStream_t stream;
-    CUDA_ASSERTRT(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    CUDA_ASSERT_RT(cudaStreamCreateWithFlags(&stream, cudaStreamDefault));
 
     if(dst->num_dims == 1) {
-        BLOCK_SIZE_X = 256; 
-        BLOCK_SIZE_Y = 4;
+        BLOCK_SIZE_X = 1024; 
+        BLOCK_SIZE_Y = 1;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = 1;
@@ -385,7 +385,7 @@ extern "C" int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src)
         dst_off = dst->mat_view.lb[0];
         src_off = src->mat_view.lb[0];
     } else if(dst->num_dims == 2) {
-        BLOCK_SIZE_X = 16;
+        BLOCK_SIZE_X = 32;
         BLOCK_SIZE_Y = 32;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
@@ -395,9 +395,9 @@ extern "C" int matrix_copy_cuda_f_float(struct matrix *dst, struct matrix *src)
         src_off = src->mat_view.lb[1] * src->dist[0] + src->mat_view.lb[0];
     } else { 
         // ndims >= 3 will use 3D kernel in loops, so the params are the same
-        BLOCK_SIZE_X = 8;
+        BLOCK_SIZE_X = 16;
         BLOCK_SIZE_Y = 8;
-        BLOCK_SIZE_Z = 16;
+        BLOCK_SIZE_Z = 8;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = dst->mat_view.ub[1] - dst->mat_view.lb[1] + 1;
         sub_nz = dst->mat_view.ub[2] - dst->mat_view.lb[2] + 1;
@@ -497,7 +497,7 @@ ndim10:
                                 copy_subarray_f_float<<<dimgrid, dimblock, 0, stream>>>(&d[dst_off],
                                     &s[src_off], dst->dist[0], dst->dist[1], dst->dist[2],
                                     src->dist[0], src->dist[1], src->dist[2], sub_nx, sub_ny, sub_nz);
-                                CUDA_ASSERTRT(cudaStreamSynchronize(stream));
+                                CUDA_ASSERT_RT(cudaStreamSynchronize(stream));
                                 if(src->num_dims <= 3)
                                     return dspaces_SUCCESS;
                             }
@@ -544,11 +544,11 @@ extern "C" int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src)
 
     // Use non-parallel design for unit benchmark
     cudaStream_t stream;
-    CUDA_ASSERTRT(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    CUDA_ASSERT_RT(cudaStreamCreateWithFlags(&stream, cudaStreamDefault));
 
     if(dst->num_dims == 1) {
-        BLOCK_SIZE_X = 256; 
-        BLOCK_SIZE_Y = 4;
+        BLOCK_SIZE_X = 1024; 
+        BLOCK_SIZE_Y = 1;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = 1;
@@ -556,7 +556,7 @@ extern "C" int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src)
         dst_off = dst->mat_view.lb[0];
         src_off = src->mat_view.lb[0];
     } else if(dst->num_dims == 2) {
-        BLOCK_SIZE_X = 16;
+        BLOCK_SIZE_X = 32;
         BLOCK_SIZE_Y = 32;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
@@ -566,9 +566,9 @@ extern "C" int matrix_copy_cuda_f_short(struct matrix *dst, struct matrix *src)
         src_off = src->mat_view.lb[1] * src->dist[0] + src->mat_view.lb[0];
     } else { 
         // ndims >= 3 will use 3D kernel in loops, so the params are the same
-        BLOCK_SIZE_X = 8;
+        BLOCK_SIZE_X = 16;
         BLOCK_SIZE_Y = 8;
-        BLOCK_SIZE_Z = 16;
+        BLOCK_SIZE_Z = 8;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = dst->mat_view.ub[1] - dst->mat_view.lb[1] + 1;
         sub_nz = dst->mat_view.ub[2] - dst->mat_view.lb[2] + 1;
@@ -668,7 +668,7 @@ ndim10:
                                 copy_subarray_f_short<<<dimgrid, dimblock, 0, stream>>>(&d[dst_off],
                                     &s[src_off], dst->dist[0], dst->dist[1], dst->dist[2],
                                     src->dist[0], src->dist[1], src->dist[2], sub_nx, sub_ny, sub_nz);
-                                CUDA_ASSERTRT(cudaStreamSynchronize(stream));
+                                CUDA_ASSERT_RT(cudaStreamSynchronize(stream));
                                 if(src->num_dims <= 3)
                                     return dspaces_SUCCESS;
                             }
@@ -715,13 +715,13 @@ extern "C" int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src)
 
     // Use non-parallel design for unit benchmark
     cudaStream_t stream;
-    CUDA_ASSERTRT(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    CUDA_ASSERT_RT(cudaStreamCreateWithFlags(&stream, cudaStreamDefault));
 
     // char function is used for arbitrary data types
     // Therefore, it needs to multiply elem_size to calculate the offsets and copy sizes
     if(dst->num_dims == 1) {
-        BLOCK_SIZE_X = 256; 
-        BLOCK_SIZE_Y = 4;
+        BLOCK_SIZE_X = 1024; 
+        BLOCK_SIZE_Y = 1;
         BLOCK_SIZE_Z = 1;
         sub_nx = (dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1) * dst->size_elem;
         sub_ny = 1 * dst->size_elem;
@@ -729,7 +729,7 @@ extern "C" int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src)
         dst_off = dst->mat_view.lb[0] * dst->size_elem;
         src_off = src->mat_view.lb[0] * dst->size_elem;
     } else if(dst->num_dims == 2) {
-        BLOCK_SIZE_X = 16;
+        BLOCK_SIZE_X = 32;
         BLOCK_SIZE_Y = 32;
         BLOCK_SIZE_Z = 1;
         sub_nx = (dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1) * dst->size_elem;
@@ -739,9 +739,9 @@ extern "C" int matrix_copy_cuda_f_char(struct matrix *dst, struct matrix *src)
         src_off = (src->mat_view.lb[1] * src->dist[0] + src->mat_view.lb[0]) * dst->size_elem;
     } else { 
         // ndims >= 3 will use 3D kernel in loops, so the params are the same
-        BLOCK_SIZE_X = 8;
+        BLOCK_SIZE_X = 16;
         BLOCK_SIZE_Y = 8;
-        BLOCK_SIZE_Z = 16;
+        BLOCK_SIZE_Z = 8;
         sub_nx = (dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1) * dst->size_elem;
         sub_ny = (dst->mat_view.ub[1] - dst->mat_view.lb[1] + 1) * dst->size_elem;
         sub_nz = (dst->mat_view.ub[2] - dst->mat_view.lb[2] + 1) * dst->size_elem;
@@ -841,7 +841,7 @@ ndim10:
                                 copy_subarray_f_char<<<dimgrid, dimblock, 0, stream>>>(&d[dst_off],
                                     &s[src_off], dst->dist[0], dst->dist[1], dst->dist[2],
                                     src->dist[0], src->dist[1], src->dist[2], sub_nx, sub_ny, sub_nz);
-                                CUDA_ASSERTRT(cudaStreamSynchronize(stream));
+                                CUDA_ASSERT_RT(cudaStreamSynchronize(stream));
                                 if(src->num_dims <= 3)
                                     return dspaces_SUCCESS;
                             }
@@ -887,8 +887,8 @@ extern "C" int matrix_copy_cuda_f_double_async(struct matrix *dst, struct matrix
     uint64_t dst_stride3, src_stride3;
 
     if(dst->num_dims == 1) {
-        BLOCK_SIZE_X = 256; 
-        BLOCK_SIZE_Y = 4;
+        BLOCK_SIZE_X = 1024; 
+        BLOCK_SIZE_Y = 1;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = 1;
@@ -896,7 +896,7 @@ extern "C" int matrix_copy_cuda_f_double_async(struct matrix *dst, struct matrix
         dst_off = dst->mat_view.lb[0];
         src_off = src->mat_view.lb[0];
     } else if(dst->num_dims == 2) {
-        BLOCK_SIZE_X = 16;
+        BLOCK_SIZE_X = 32;
         BLOCK_SIZE_Y = 32;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
@@ -906,9 +906,9 @@ extern "C" int matrix_copy_cuda_f_double_async(struct matrix *dst, struct matrix
         src_off = src->mat_view.lb[1] * src->dist[0] + src->mat_view.lb[0];
     } else { 
         // ndims >= 3 will use 3D kernel in loops, so the params are the same
-        BLOCK_SIZE_X = 8;
+        BLOCK_SIZE_X = 16;
         BLOCK_SIZE_Y = 8;
-        BLOCK_SIZE_Z = 16;
+        BLOCK_SIZE_Z = 8;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = dst->mat_view.ub[1] - dst->mat_view.lb[1] + 1;
         sub_nz = dst->mat_view.ub[2] - dst->mat_view.lb[2] + 1;
@@ -1053,8 +1053,8 @@ extern "C" int matrix_copy_cuda_f_float_async(struct matrix *dst, struct matrix 
     uint64_t dst_stride3, src_stride3;
 
     if(dst->num_dims == 1) {
-        BLOCK_SIZE_X = 256; 
-        BLOCK_SIZE_Y = 4;
+        BLOCK_SIZE_X = 1024; 
+        BLOCK_SIZE_Y = 1;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = 1;
@@ -1062,7 +1062,7 @@ extern "C" int matrix_copy_cuda_f_float_async(struct matrix *dst, struct matrix 
         dst_off = dst->mat_view.lb[0];
         src_off = src->mat_view.lb[0];
     } else if(dst->num_dims == 2) {
-        BLOCK_SIZE_X = 16;
+        BLOCK_SIZE_X = 32;
         BLOCK_SIZE_Y = 32;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
@@ -1072,9 +1072,9 @@ extern "C" int matrix_copy_cuda_f_float_async(struct matrix *dst, struct matrix 
         src_off = src->mat_view.lb[1] * src->dist[0] + src->mat_view.lb[0];
     } else { 
         // ndims >= 3 will use 3D kernel in loops, so the params are the same
-        BLOCK_SIZE_X = 8;
+        BLOCK_SIZE_X = 16;
         BLOCK_SIZE_Y = 8;
-        BLOCK_SIZE_Z = 16;
+        BLOCK_SIZE_Z = 8;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = dst->mat_view.ub[1] - dst->mat_view.lb[1] + 1;
         sub_nz = dst->mat_view.ub[2] - dst->mat_view.lb[2] + 1;
@@ -1219,8 +1219,8 @@ extern "C" int matrix_copy_cuda_f_short_async(struct matrix *dst, struct matrix 
     uint64_t dst_stride3, src_stride3;
 
     if(dst->num_dims == 1) {
-        BLOCK_SIZE_X = 256; 
-        BLOCK_SIZE_Y = 4;
+        BLOCK_SIZE_X = 1024; 
+        BLOCK_SIZE_Y = 1;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = 1;
@@ -1228,7 +1228,7 @@ extern "C" int matrix_copy_cuda_f_short_async(struct matrix *dst, struct matrix 
         dst_off = dst->mat_view.lb[0];
         src_off = src->mat_view.lb[0];
     } else if(dst->num_dims == 2) {
-        BLOCK_SIZE_X = 16;
+        BLOCK_SIZE_X = 32;
         BLOCK_SIZE_Y = 32;
         BLOCK_SIZE_Z = 1;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
@@ -1238,9 +1238,9 @@ extern "C" int matrix_copy_cuda_f_short_async(struct matrix *dst, struct matrix 
         src_off = src->mat_view.lb[1] * src->dist[0] + src->mat_view.lb[0];
     } else { 
         // ndims >= 3 will use 3D kernel in loops, so the params are the same
-        BLOCK_SIZE_X = 8;
+        BLOCK_SIZE_X = 16;
         BLOCK_SIZE_Y = 8;
-        BLOCK_SIZE_Z = 16;
+        BLOCK_SIZE_Z = 8;
         sub_nx = dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1;
         sub_ny = dst->mat_view.ub[1] - dst->mat_view.lb[1] + 1;
         sub_nz = dst->mat_view.ub[2] - dst->mat_view.lb[2] + 1;
@@ -1387,8 +1387,8 @@ extern "C" int matrix_copy_cuda_f_char_async(struct matrix *dst, struct matrix *
     // char function is used for arbitrary data types
     // Therefore, it needs to multiply elem_size to calculate the offsets and copy sizes
     if(dst->num_dims == 1) {
-        BLOCK_SIZE_X = 256; 
-        BLOCK_SIZE_Y = 4;
+        BLOCK_SIZE_X = 1024; 
+        BLOCK_SIZE_Y = 1;
         BLOCK_SIZE_Z = 1;
         sub_nx = (dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1) * dst->size_elem;
         sub_ny = 1 * dst->size_elem;
@@ -1396,7 +1396,7 @@ extern "C" int matrix_copy_cuda_f_char_async(struct matrix *dst, struct matrix *
         dst_off = dst->mat_view.lb[0] * dst->size_elem;
         src_off = src->mat_view.lb[0] * dst->size_elem;
     } else if(dst->num_dims == 2) {
-        BLOCK_SIZE_X = 16;
+        BLOCK_SIZE_X = 32;
         BLOCK_SIZE_Y = 32;
         BLOCK_SIZE_Z = 1;
         sub_nx = (dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1) * dst->size_elem;
@@ -1406,9 +1406,9 @@ extern "C" int matrix_copy_cuda_f_char_async(struct matrix *dst, struct matrix *
         src_off = (src->mat_view.lb[1] * src->dist[0] + src->mat_view.lb[0]) * dst->size_elem;
     } else { 
         // ndims >= 3 will use 3D kernel in loops, so the params are the same
-        BLOCK_SIZE_X = 8;
+        BLOCK_SIZE_X = 16;
         BLOCK_SIZE_Y = 8;
-        BLOCK_SIZE_Z = 16;
+        BLOCK_SIZE_Z = 8;
         sub_nx = (dst->mat_view.ub[0] - dst->mat_view.lb[0] + 1) * dst->size_elem;
         sub_ny = (dst->mat_view.ub[1] - dst->mat_view.lb[1] + 1) * dst->size_elem;
         sub_nz = (dst->mat_view.ub[2] - dst->mat_view.lb[2] + 1) * dst->size_elem;
