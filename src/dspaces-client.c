@@ -61,6 +61,7 @@
 #define MB (1024 * 1024)
 #define BULK_TRANSFER_MAX (128 * MB)
 
+#ifdef HAVE_CUDA
 #define CUDA_ASSERT(x)                                                          \
     do                                                                          \
         {                                                                       \
@@ -145,6 +146,7 @@
 
 #define CUDA_MAX_CONCURRENT_KERNELS 128
 #define DSPACES_CUDA_DEFAULT_CONCURRENT_KERNELS 128
+#endif /* HAVE_CUDA */
 
 static int g_is_initialized = 0;
 
@@ -166,6 +168,7 @@ struct sub_list_node {
     int id;
 };
 
+#ifdef HAVE_CUDA
 struct dspaces_cuda_dev_info {
     int gdr_support;
     int concurrency_enabled;
@@ -182,6 +185,7 @@ struct dspaces_cuda_info {
     int num_concurrent_kernels;
     struct dspaces_cuda_dev_info *dev_list;
 };
+#endif /* HAVE_CUDA */
 
 
 struct dspaces_put_req {
@@ -224,7 +228,11 @@ struct dspaces_client {
     int local_put_count; // used during finalize
     int f_debug;
     int f_final;
+
+#ifdef HAVE_CUDA
     struct dspaces_cuda_info cuda_info;
+#endif /* HAVE_CUDA*/
+
     int listener_init;
     struct dspaces_put_req *put_reqs;
     struct dspaces_put_req *put_reqs_end;
@@ -579,6 +587,7 @@ static int dspaces_init_internal(int rank, dspaces_client_t *c)
     return dspaces_SUCCESS;
 }
 
+#ifdef HAVE_CUDA
 static int cuda_max_concurrent_kernels_num(int dev_rank)
 {
     /* 
@@ -692,6 +701,7 @@ static int dspaces_init_gpu(dspaces_client_t client, const char* listen_addr_str
 
     return dspaces_SUCCESS;
 }
+#endif /* HAVE_CUDA */
 
 static int dspaces_init_margo(dspaces_client_t client,
                               const char *listen_addr_str)
@@ -885,6 +895,7 @@ static int dspaces_post_init(dspaces_client_t client)
     client->local_put_count = 0;
     client->f_final = 0;
 
+#ifdef HAVE_CUDA
     int device, totdevice;
     CUDA_ASSERT_RT_CLIENT(cudaGetDevice(&device));
     CUDA_ASSERT_RT_CLIENT(cudaGetDeviceCount(&totdevice));
@@ -893,7 +904,7 @@ static int dspaces_post_init(dspaces_client_t client)
     CUDA_ASSERT_RT_CLIENT(cudaMemGetInfo(&d_free, &d_total));
     DEBUG_OUT("Rank %d: Device = %d/%d, Host Free Memory = %lld, Device Free Memory = %zu \n",
                 client->rank, device, totdevice, meminfo.MemAvailableMiB, d_free);
-
+#endif /* HAVE_CUDA */
 
     return (dspaces_SUCCESS);
 }
@@ -914,10 +925,12 @@ int dspaces_init(int rank, dspaces_client_t *c)
         return (ret);
     }
 
+#ifdef HAVE_CUDA
     ret = dspaces_init_gpu(client, listen_addr_str);
     if(ret != dspaces_SUCCESS) {
         return (ret);
     }
+#endif /* HAVE_CUDA */
 
     ret = dspaces_init_margo(client, listen_addr_str);
 
@@ -954,10 +967,12 @@ int dspaces_init_mpi(MPI_Comm comm, dspaces_client_t *c)
         return (ret);
     }
 
+#ifdef HAVE_CUDA
     ret = dspaces_init_gpu(client, listen_addr_str);
     if(ret != dspaces_SUCCESS) {
         return (ret);
     }
+#endif /* HAVE_CUDA */
 
     ret = dspaces_init_margo(client, listen_addr_str);
     free(listen_addr_str);
@@ -1000,6 +1015,14 @@ int dspaces_init_wan(const char *listen_addr_str, const char *conn_str,
     if(ret != 0) {
         return (ret);
     }
+
+#ifdef HAVE_CUDA
+    ret = dspaces_init_gpu(client, listen_addr_str);
+    if(ret != dspaces_SUCCESS) {
+        return (ret);
+    }
+#endif /* HAVE_CUDA */
+
     dspaces_init_margo(client, listen_addr_str);
     if(ret != 0) {
         return (ret);
@@ -1032,6 +1055,14 @@ int dspaces_init_wan_mpi(const char *listen_addr_str, const char *conn_str,
     if(ret != 0) {
         return (ret);
     }
+
+#ifdef HAVE_CUDA
+    ret = dspaces_init_gpu(client, listen_addr_str);
+    if(ret != dspaces_SUCCESS) {
+        return (ret);
+    }
+#endif /* HAVE_CUDA */
+
     ret = dspaces_init_margo(client, listen_addr_str);
     if(ret != 0) {
         return (ret);
@@ -1097,7 +1128,10 @@ int dspaces_fini(dspaces_client_t client)
     free(client->server_address);
     ls_free(client->dcg->ls);
     free(client->dcg);
+
+#ifdef HAVE_CUDA
     free(client->cuda_info.dev_list);
+#endif /* HAVE_CUDA */
 
     margo_finalize(client->mid);
 
@@ -1316,6 +1350,7 @@ static int dspaces_cpu_put(dspaces_client_t client, const char *var_name, unsign
     return (dspaces_cpu_put_tag(client, var_name, ver, elem_size, 0, ndim, lb, ub, data));
 }
 
+#ifdef HAVE_CUDA
 static int cuda_put_tag_host_opt(dspaces_client_t client, const char *var_name,
                                  unsigned int ver, int elem_size, int tag, int ndim,
                                  uint64_t *lb, uint64_t *ub, const void *data)
@@ -1563,12 +1598,15 @@ static int dspaces_cuda_put(dspaces_client_t client, const char *var_name, unsig
     }
     return ret;
 }
+#endif /* HAVE_CUDA */
 
 int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
                 const void *data)
 {
     int ret;
+
+#ifdef HAVE_CUDA
     struct cudaPointerAttributes ptr_attr;
     CUDA_ASSERT_RT_CLIENT(cudaPointerGetAttributes(&ptr_attr, data));
     if(ptr_attr.type == cudaMemoryTypeDevice) {
@@ -1576,6 +1614,10 @@ int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
     } else {
         ret = dspaces_cpu_put(client, var_name, ver, elem_size, ndim, lb, ub, data);
     }
+#else
+    ret = dspaces_cpu_put(client, var_name, ver, elem_size, ndim, lb, ub, data);
+#endif /* HAVE_CUDA */
+
     return ret;
 }
 
@@ -1584,6 +1626,8 @@ int dspaces_put_tag(dspaces_client_t client, const char *var_name, unsigned int 
                     const void *data)
 {
     int ret;
+
+#ifdef HAVE_CUDA
     struct cudaPointerAttributes ptr_attr;
     CUDA_ASSERT_RT_CLIENT(cudaPointerGetAttributes(&ptr_attr, data));
     if(ptr_attr.type == cudaMemoryTypeDevice) {
@@ -1591,6 +1635,10 @@ int dspaces_put_tag(dspaces_client_t client, const char *var_name, unsigned int 
     } else {
         ret = dspaces_cpu_put_tag(client, var_name, ver, elem_size, tag, ndim, lb, ub, data);
     }
+#else
+    ret = dspaces_cpu_put_tag(client, var_name, ver, elem_size, tag, ndim, lb, ub, data);
+#endif /* HAVE_CUDA */
+
     return ret;
 }
 
@@ -1918,6 +1966,7 @@ static int get_data(dspaces_client_t client, int num_odscs,
     return 0;
 }
 
+#ifdef HAVE_CUDA
 static int cuda_get_data_baseline(dspaces_client_t client, int num_odscs,
                              obj_descriptor req_obj, obj_descriptor *odsc_tab, void *data)
 {
@@ -2412,6 +2461,7 @@ static int cuda_get_data_hybrid(dspaces_client_t client, int num_odscs,
 
     return ret;
 }
+#endif /* HAVE_CUDA */
 
 static int dspaces_init_listener(dspaces_client_t client)
 {
@@ -2766,6 +2816,7 @@ int dspaces_cpu_get(dspaces_client_t client, const char *var_name, unsigned int 
     return (ret);
 }
 
+#ifdef HAVE_CUDA
 static int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsigned int ver,
                      int elem_size, int ndim, uint64_t *lb, uint64_t *ub, void *data, int timeout)
 {
@@ -2841,12 +2892,15 @@ static int dspaces_cuda_get(dspaces_client_t client, const char *var_name, unsig
     }
     return (ret);
 }
+#endif /* HAVE_CUDA */
 
 int dspaces_get(dspaces_client_t client, const char *var_name, unsigned int ver,
                 int elem_size, int ndim, uint64_t *lb, uint64_t *ub, void *data,
                 int timeout)
 {
     int ret;
+
+#ifdef HAVE_CUDA
     struct cudaPointerAttributes ptr_attr;
     CUDA_ASSERT_RT_CLIENT(cudaPointerGetAttributes(&ptr_attr, data));
     if(ptr_attr.type == cudaMemoryTypeDevice) {
@@ -2854,6 +2908,10 @@ int dspaces_get(dspaces_client_t client, const char *var_name, unsigned int ver,
     } else {
         ret = dspaces_cpu_get(client, var_name, ver, elem_size, ndim, lb, ub, data, timeout);
     }
+#else
+    ret = dspaces_cpu_get(client, var_name, ver, elem_size, ndim, lb, ub, data, timeout);
+#endif /* HAVE_CUDA */
+
     return ret;
 }
 
