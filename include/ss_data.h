@@ -87,15 +87,6 @@ struct obj_data {
     unsigned int f_free : 1;
 };
 
-struct dc_request {
-    struct list_head entry;
-    struct obj_data* od;
-    /* margo request for bulk_itransfer(); 0 - gdr; 1 - host */
-    margo_request * margo_req;
-    hg_bulk_t* bulk_handle;
-    int f_error;
-};
-
 /*
   A view in  the matrix allows to extract any subset  of values from a
   matrix.
@@ -519,9 +510,5 @@ struct lock_data *get_lock(struct list_head *list, char *name);
 struct lock_data *create_lock(struct list_head *list, char *name);
 
 char **addr_str_buf_to_list(char *buf, int num_addrs);
-
-struct dc_request *dc_req_alloc(struct obj_data *od);
-struct dc_request *dc_req_find(struct list_head *dc_req_list, obj_descriptor *odsc);
-void dc_req_free(struct dc_request *dc_req);
 
 #endif /* __SS_DATA_H_ */

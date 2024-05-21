@@ -160,7 +160,6 @@ struct dspaces_provider {
     ABT_mutex dht_mutex;
     ABT_mutex sspace_mutex;
     ABT_mutex kill_mutex;
-    ABT_mutex dc_mutex;
 
     ABT_xstream drain_xstream;
     ABT_pool drain_pool;
@@ -724,7 +723,6 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
     dsg_l->num_apps = ds_conf.num_apps;
 
     INIT_LIST_HEAD(&dsg_l->obj_desc_drain_list);
-    INIT_LIST_HEAD(&dsg_l->dc_req_list);
 
     server->dsg = dsg_l;
     return 0;
@@ -1199,7 +1197,6 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     ABT_mutex_create(&server->dht_mutex);
     ABT_mutex_create(&server->sspace_mutex);
     ABT_mutex_create(&server->kill_mutex);
-    ABT_mutex_create(&server->dc_mutex);
 
     hg = margo_get_class(server->mid);
 
