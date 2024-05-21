@@ -1818,7 +1818,7 @@ static int get_data(dspaces_client_t client, int num_odscs,
     int ret;
     hg_return_t hret;
 
-    in = (bulk_in_t *)malloc(sizeof(bulk_in_t) * num_odscs);
+    in = (bulk_in_t *)calloc(sizeof(bulk_in_t), num_odscs);
     od = malloc(num_odscs * sizeof(struct obj_data *));
     hndl = (hg_handle_t *)malloc(sizeof(hg_handle_t) * num_odscs);
     serv_req = (margo_request *)malloc(sizeof(margo_request) * num_odscs);
@@ -2578,6 +2578,7 @@ int dspaces_put_local(dspaces_client_t client, const char *var_name,
         margo_destroy(handle);
         return dspaces_ERR_MERCURY;
     }
+    DEBUG_OUT("RPC sent, awaiting response.\n");
 
     hret = margo_get_output(handle, &out);
     if(hret != HG_SUCCESS) {
@@ -2609,20 +2610,23 @@ static int get_odscs(dspaces_client_t client, obj_descriptor *odsc, int timeout,
     in.odsc_gdim.size = sizeof(*odsc);
     in.odsc_gdim.raw_odsc = (char *)odsc;
     in.param = timeout;
-
+  
+    DEBUG_OUT("starting query.\n"); 
     set_global_dimension(&(client->dcg->gdim_list), odsc->name,
                          &(client->dcg->default_gdim), &od_gdim);
     in.odsc_gdim.gdim_size = sizeof(od_gdim);
     in.odsc_gdim.raw_gdim = (char *)(&od_gdim);
+    DEBUG_OUT("Found gdims.\n");
 
     get_server_address(client, &server_addr);
-
+     
     hret = margo_create(client->mid, server_addr, client->query_id, &handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: %s: margo_create() failed with %d.\n", __func__,
                 hret);
         return (0);
     }
+    DEBUG_OUT("Forwarding RPC.\n");
     hret = margo_forward(handle, &in);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: %s: margo_forward() failed with %d.\n",
@@ -2630,6 +2634,7 @@ static int get_odscs(dspaces_client_t client, obj_descriptor *odsc, int timeout,
         margo_destroy(handle);
         return (0);
     }
+    DEBUG_OUT("RPC sent, awaiting reply.\n");
     hret = margo_get_output(handle, &out);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: %s: margo_get_output() failed with %d.\n",

@@ -1016,12 +1016,18 @@ static void *bootstrap_python()
 static int dspaces_init_py_mods(dspaces_provider_t server,
                                 struct dspaces_module **pmodsp)
 {
+    static const char *static_pmods[][2] = {
+        {"goes17", "s3nc_mod"},
+        {"planetary", "azure_mod"},
+        {"cmips3", "s3cmip_mod"}
+    };
     char *pypath = getenv("PYTHONPATH");
     char *new_pypath;
     int pypath_len;
     struct dspaces_module *pmods;
-    int npmods = 1;
+    int npmods = sizeof(static_pmods) / sizeof(static_pmods[0]);
     PyObject *pName;
+    int i;
 
     pypath_len = strlen(xstr(DSPACES_MOD_DIR)) + 1;
     if(pypath) {
@@ -1039,18 +1045,19 @@ static int dspaces_init_py_mods(dspaces_provider_t server,
     bootstrap_python();
 
     pmods = malloc(sizeof(*pmods) * npmods);
-    pmods[0].name = strdup("goes17");
-    pmods[0].type = DSPACES_MOD_PY;
-    pName = PyUnicode_DecodeFSDefault("s3nc_mod");
-    pmods[0].pModule = PyImport_Import(pName);
-    if(pmods[0].pModule == NULL) {
-        fprintf(stderr,
-                "WARNING: could not load s3nc mod from %s. File missing? Any "
-                "s3nc accesses will fail.\n",
-                xstr(DSPACES_MOD_DIR));
-    }
-    Py_DECREF(pName);
-
+    for(i = 0; i < npmods; i++) {
+        pmods[i].name = strdup(static_pmods[i][0]);
+        pmods[i].type = DSPACES_MOD_PY;
+        pName = PyUnicode_DecodeFSDefault(static_pmods[i][1]);
+        pmods[i].pModule = PyImport_Import(pName);
+        if(pmods[0].pModule == NULL) {
+            fprintf(stderr,
+                "WARNING: could not load %s mod from %s. File missing? Any "
+                "%s accesses will fail.\n",
+                static_pmods[i][1], xstr(DSPACES_MOD_DIR), pmods[i].name);
+        }
+        Py_DECREF(pName);
+    }   
     free(new_pypath);
 
     *pmodsp = pmods;
@@ -2094,22 +2101,31 @@ static void free_arg_list(struct dspaces_module_args *args, int len)
 static void route_request(dspaces_provider_t server, obj_descriptor *odsc,
                           struct global_dimension *gdim)
 {
+    static const char *module_nspaces[][2] = {
+        {"goes17\\", "goes17"},
+        {"cmip6-planetary\\", "planetary"},
+        {"cmip6-s3\\", "cmips3"},
+        {NULL, NULL}
+    };
     const char *s3nc_nspace = "goes17\\";
+    const char *azure_nspace = "cmip6-planetary\\";
+    const char *s3cmip_nspace = "cmip6-s3\\";
     struct dspaces_module_args *args;
     struct dspaces_module_ret *res = NULL;
     struct obj_data *od;
     obj_descriptor *od_odsc;
+    char **mod_desc;
     int nargs;
     int i;
 
     DEBUG_OUT("Routing '%s'\n", odsc->name);
 
-    if(strstr(odsc->name, s3nc_nspace) == odsc->name) {
-        nargs = build_module_args_from_odsc(odsc, &args);
-        res = dspaces_module_exec(server, "goes17", "query", args, nargs,
-                                  DSPACES_MOD_RET_ARRAY);
-        free_arg_list(args, nargs);
-        free(args);
+    for(mod_desc = (char **)module_nspaces[0]; mod_desc[0] != NULL; mod_desc+=2) {
+        if(strstr(odsc->name, mod_desc[0]) == odsc->name) {
+             nargs = build_module_args_from_odsc(odsc, &args);
+             res = dspaces_module_exec(server, mod_desc[1], "query", args,
+                                        nargs, DSPACES_MOD_RET_ARRAY);
+        }
     }
 
     if(res) {
@@ -2360,6 +2376,7 @@ static void query_rpc(hg_handle_t handle)
         get_query_odscs(server, &in, timeout, &results, req_id);
 
     out.odsc_list.raw_odsc = (char *)results;
+    DEBUG_OUT("Responding with %li result(s).\n", out.odsc_list.size / sizeof(obj_descriptor));
     margo_respond(handle, &out);
     margo_free_input(handle, &in);
     margo_destroy(handle);
@@ -3125,14 +3142,16 @@ static void pexec_rpc(hg_handle_t handle)
     pexec_out_t out;
     hg_return_t hret;
     hg_bulk_t bulk_handle;
-    obj_descriptor in_odsc;
+    obj_descriptor in_odsc, odsc;
     hg_size_t rdma_size;
     void *fn = NULL, *res_data;
-    struct obj_data *od, *from_obj;
+    struct obj_data *od, *arg_obj, **od_tab, **from_objs = NULL;
+    int num_obj;
     PyObject *array, *fnp, *arg, *pres, *pres_bytes;
     static PyObject *pklmod = NULL;
     ABT_cond cond;
     ABT_mutex mtx;
+    int i;
 
     hret = margo_get_input(handle, &in);
     if(hret != HG_SUCCESS) {
@@ -3179,8 +3198,36 @@ static void pexec_rpc(hg_handle_t handle)
     margo_bulk_free(bulk_handle);
     route_request(server, &in_odsc, &(server->dsg->default_gdim));
 
-    from_obj = ls_find(server->dsg->ls, &in_odsc);
-    array = build_ndarray_from_od(from_obj);
+    ABT_mutex_lock(server->ls_mutex);
+    num_obj = ls_find_all(server->dsg->ls, &in_odsc, &from_objs);
+    if(num_obj > 0) {
+        DEBUG_OUT("found %i objects in local storage to populate input\n", num_obj);
+        arg_obj = obj_data_alloc(&in_odsc);
+        od_tab = malloc(num_obj * sizeof(*od_tab));
+        for(i = 0; i < num_obj; i++) {
+            // Can we skip the intermediate copy?
+            odsc = from_objs[i]->obj_desc;
+            bbox_intersect(&in_odsc.bb, &odsc.bb, &odsc.bb);
+            od_tab[i] = obj_data_alloc(&odsc);
+            ssd_copy(od_tab[i], from_objs[i]);
+            ssd_copy(arg_obj, od_tab[i]);
+            obj_data_free(od_tab[i]);
+        }
+        free(od_tab);
+    }
+    ABT_mutex_unlock(server->ls_mutex);
+    if(num_obj < 1) {
+        DEBUG_OUT("could not find input object\n");   
+        out.length = 0;
+        out.handle = 0;
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_destroy(handle);
+        return;
+    } else if(from_objs) {
+        free(from_objs);
+    }
+    array = build_ndarray_from_od(arg_obj);
 
     // Race condition? Protect with mutex?
     if((pklmod == NULL) &&
@@ -3222,6 +3269,7 @@ static void pexec_rpc(hg_handle_t handle)
             fprintf(stderr, "ERROR: (%s): margo_bulk_create failed with %d.\n",
                     __func__, hret);
             out.length = 0;
+            out.handle = 0;
             margo_respond(handle, &out);
             margo_free_input(handle, &in);
             margo_destroy(handle);
@@ -3261,6 +3309,7 @@ static void pexec_rpc(hg_handle_t handle)
     DEBUG_OUT("done with pexec handling\n");
 
     Py_XDECREF(array);
+    obj_data_free(arg_obj);
 }
 DEFINE_MARGO_RPC_HANDLER(pexec_rpc)
 #endif // DSPACES_HAVE_PYTHON

@@ -5,9 +5,9 @@
 #include <numpy/ndarrayobject.h>
 #include <numpy/ndarraytypes.h>
 
-#include <dspaces.h>
 #include <dspaces-ops.h>
 #include <dspaces-server.h>
+#include <dspaces.h>
 
 #include <stdio.h>
 
@@ -22,7 +22,11 @@ PyObject *wrapper_dspaces_init(int rank)
 
     clientp = malloc(sizeof(*clientp));
 
+    // clang-format off
+    //Py_BEGIN_ALLOW_THREADS
     ret = dspaces_init(rank, clientp);
+    //Py_END_ALLOW_THREADS
+    // clang-format on
     if(ret != 0) {
         sprintf(err_str, "dspaces_init() failed with %i", ret);
         PyErr_SetString(PyExc_RuntimeError, err_str);
@@ -46,11 +50,15 @@ PyObject *wrapper_dspaces_init_mpi(PyObject *commpy)
 
     comm_p = PyMPIComm_Get(commpy);
     if(!comm_p) {
-        return(NULL);
+        return (NULL);
     }
     clientp = malloc(sizeof(*clientp));
 
+    // clang-format off
+    //Py_BEGIN_ALLOW_THREADS
     ret = dspaces_init_mpi(*comm_p, clientp);
+    //Py_END_ALLOW_THREADS
+    // clang-format on
     if(ret != 0) {
         sprintf(err_str, "dspaces_init_mpi() failed with %i", ret);
         PyErr_SetString(PyExc_RuntimeError, err_str);
@@ -62,7 +70,8 @@ PyObject *wrapper_dspaces_init_mpi(PyObject *commpy)
     return (client);
 }
 
-PyObject *wrapper_dspaces_init_wan(const char *listen_str, const char *conn, int rank)
+PyObject *wrapper_dspaces_init_wan(const char *listen_str, const char *conn,
+                                   int rank)
 {
     dspaces_client_t *clientp;
     char err_str[100];
@@ -73,7 +82,11 @@ PyObject *wrapper_dspaces_init_wan(const char *listen_str, const char *conn, int
 
     clientp = malloc(sizeof(*clientp));
 
+    // clang-format off
+    //Py_BEGIN_ALLOW_THREADS
     ret = dspaces_init_wan(listen_str, conn, rank, clientp);
+    //Py_END_ALLOW_THREADS
+    // clang-format on
     if(ret != 0) {
         sprintf(err_str, "dspaces_init_wan() failed with %i", ret);
         PyErr_SetString(PyExc_RuntimeError, err_str);
@@ -85,7 +98,8 @@ PyObject *wrapper_dspaces_init_wan(const char *listen_str, const char *conn, int
     return (client);
 }
 
-PyObject *wrapper_dspaces_init_wan_mpi(const char *listen_str, const char *conn, PyObject *commpy)
+PyObject *wrapper_dspaces_init_wan_mpi(const char *listen_str, const char *conn,
+                                       PyObject *commpy)
 {
     MPI_Comm *comm_p = NULL;
     dspaces_client_t *clientp;
@@ -97,25 +111,28 @@ PyObject *wrapper_dspaces_init_wan_mpi(const char *listen_str, const char *conn,
 
     comm_p = PyMPIComm_Get(commpy);
     if(!comm_p) {
-        return(NULL);
+        return (NULL);
     }
     clientp = malloc(sizeof(*clientp));
 
+    // clang-format off
+    //Py_BEGIN_ALLOW_THREADS
     ret = dspaces_init_wan_mpi(listen_str, conn, *comm_p, clientp);
+    //Py_END_ALLOW_THREADS
+    // clang-format on
     if(ret != 0) {
         sprintf(err_str, "dspaces_init_wan_mpi() failed with %i", ret);
         PyErr_SetString(PyExc_RuntimeError, err_str);
         return NULL;
-    }    
-
+    }
 
     PyObject *client = PyLong_FromVoidPtr((void *)clientp);
 
-    return(client);
+    return (client);
 }
 
 PyObject *wrapper_dspaces_server_init(const char *listen_str, PyObject *commpy,
-                                const char *conf)
+                                      const char *conf)
 {
     MPI_Comm *comm_p = NULL;
     dspaces_provider_t *serverp;
@@ -127,11 +144,15 @@ PyObject *wrapper_dspaces_server_init(const char *listen_str, PyObject *commpy,
 
     comm_p = PyMPIComm_Get(commpy);
     if(!comm_p) {
-        return(NULL);
+        return (NULL);
     }
     serverp = malloc(sizeof(*serverp));
 
+    // clang-format off
+    //Py_BEGIN_ALLOW_THREADS
     ret = dspaces_server_init(listen_str, *comm_p, conf, serverp);
+    //Py_END_ALLOW_THREADS
+    // clang-format on
     if(ret != 0) {
         sprintf(err_str, "dspaces_init_mpi() failed with %i", ret);
         PyErr_SetString(PyExc_RuntimeError, err_str);
@@ -183,12 +204,18 @@ void wrapper_dspaces_put(PyObject *clientppy, PyObject *obj, const char *name,
     PyObject *item;
     int i;
 
+    //Reverse order of indices
     for(i = 0; i < ndim; i++) {
         item = PyTuple_GetItem(offset, i);
-        lb[i] = PyLong_AsLong(item);
-        ub[i] = lb[i] + ((long)shape[i] - 1);
+        lb[(ndim-1) - i] = PyLong_AsLong(item);
+        ub[(ndim-1) - i] = lb[(ndim-1) - i] + ((long)shape[i] - 1);
     }
+
+    // clang-format off
+    //Py_BEGIN_ALLOW_THREADS
     dspaces_put_tag(*clientp, name, version, size, tag, ndim, lb, ub, data);
+    //Py_END_ALLOW_THREADS
+    // clang-format on
 
     return;
 }
@@ -209,30 +236,36 @@ PyObject *wrapper_dspaces_get(PyObject *clientppy, const char *name,
     npy_intp dims[ndim];
     int i;
 
+     //Reverse order of indices
     for(i = 0; i < ndim; i++) {
         item = PyTuple_GetItem(lbt, i);
-        lb[i] = PyLong_AsLong(item);
+        lb[(ndim-1) - i] = PyLong_AsLong(item);
         item = PyTuple_GetItem(ubt, i);
-        ub[i] = PyLong_AsLong(item);
+        ub[(ndim-1) - i] = PyLong_AsLong(item);
     }
 
-    Py_BEGIN_ALLOW_THREADS
-    dspaces_aget(*clientp, name, version, ndim, lb, ub, &data, &tag, timeout);
-    Py_END_ALLOW_THREADS
 
-    if(data == NULL) {
+    // clang-format off
+    //Py_BEGIN_ALLOW_THREADS 
+    dspaces_aget(*clientp, name, version, ndim, lb, ub,
+                                        &data, &tag, timeout);
+    //Py_END_ALLOW_THREADS
+    // clang-format on
+
+        if(data == NULL)
+    {
         Py_INCREF(Py_None);
-        return(Py_None);
+        return (Py_None);
     }
 
     if(dtype == Py_None) {
-        descr = PyArray_DescrNewFromType(tag); 
+        descr = PyArray_DescrNewFromType(tag);
     } else {
         descr = PyArray_DescrNew((PyArray_Descr *)dtype);
     }
 
     for(i = 0; i < ndim; i++) {
-        dims[i] = ((ub[i] - lb[i]) + 1);
+        dims[(ndim-1) - i] = ((ub[i] - lb[i]) + 1);
     }
 
     arr = PyArray_NewFromDescr(&PyArray_Type, descr, ndim, dims, NULL, data, 0,
@@ -242,8 +275,8 @@ PyObject *wrapper_dspaces_get(PyObject *clientppy, const char *name,
 }
 
 PyObject *wrapper_dspaces_pexec(PyObject *clientppy, const char *name,
-				int version, PyObject *lbt, PyObject *ubt,
-				PyObject *fn, const char *fn_name)
+                                int version, PyObject *lbt, PyObject *ubt,
+                                PyObject *fn, const char *fn_name)
 {
     dspaces_client_t *clientp = PyLong_AsVoidPtr(clientppy);
     PyObject *item;
@@ -255,47 +288,52 @@ PyObject *wrapper_dspaces_pexec(PyObject *clientppy, const char *name,
     int i;
 
     if(lbt == Py_None || ubt == Py_None) {
-        if (lbt != ubt) {
-            PyErr_SetString(PyExc_TypeError, "both lb and ub must be set or neither");
-            return(NULL);
+        if(lbt != ubt) {
+            PyErr_SetString(PyExc_TypeError,
+                            "both lb and ub must be set or neither");
+            return (NULL);
         }
     } else if(PyTuple_GET_SIZE(lbt) != PyTuple_GET_SIZE(ubt)) {
         PyErr_SetString(PyExc_TypeError, "lb and ub must have the same lenght");
-        return(NULL);
+        return (NULL);
     } else {
         ndim = PyTuple_GET_SIZE(lbt);
     }
 
     lb = malloc(sizeof(*lb) * ndim);
     ub = malloc(sizeof(*ub) * ndim);
+    //Reverse order of indices
     for(i = 0; i < ndim; i++) {
         item = PyTuple_GetItem(lbt, i);
-        lb[i] = PyLong_AsLong(item);
+        lb[(ndim-1) - i] = PyLong_AsLong(item);
         item = PyTuple_GetItem(ubt, i);
-        ub[i] = PyLong_AsLong(item);
+        ub[(ndim-1) - i] = PyLong_AsLong(item);
     }
 
     if(!PyBytes_Check(fn)) {
-         PyErr_SetString(PyExc_TypeError, "fn must be serialized as a a byte string");
-         return(NULL);
+        PyErr_SetString(PyExc_TypeError,
+                        "fn must be serialized as a a byte string");
+        return (NULL);
     }
 
-    dspaces_pexec(*clientp, name, version, ndim, lb, ub, PyBytes_AsString(fn), PyBytes_Size(fn)+1, fn_name, &data, &data_size);
+    dspaces_pexec(*clientp, name, version, ndim, lb, ub, PyBytes_AsString(fn),
+                  PyBytes_Size(fn) + 1, fn_name, &data, &data_size);
 
     free(lb);
     free(ub);
 
-    if(data_size > 0) { 
+    if(data_size > 0) {
         result = PyBytes_FromStringAndSize(data, data_size);
     } else {
         Py_INCREF(Py_None);
         result = Py_None;
     }
 
-    return(result);
+    return (result);
 }
 
-void wrapper_dspaces_define_gdim(PyObject *clientppy, const char *name, PyObject *gdimt)
+void wrapper_dspaces_define_gdim(PyObject *clientppy, const char *name,
+                                 PyObject *gdimt)
 {
     dspaces_client_t *clientp = PyLong_AsVoidPtr(clientppy);
     int ndim = PyTuple_GET_SIZE(gdimt);
@@ -305,10 +343,79 @@ void wrapper_dspaces_define_gdim(PyObject *clientppy, const char *name, PyObject
 
     for(i = 0; i < ndim; i++) {
         item = PyTuple_GetItem(gdimt, i);
-        gdim[i] = PyLong_AsLong(item);    
+        gdim[(ndim-1) - i] = PyLong_AsLong(item);
     }
 
     dspaces_define_gdim(*clientp, name, ndim, gdim);
+}
+
+PyObject *wrapper_dspaces_get_vars(PyObject *clientppy)
+{
+    dspaces_client_t *clientp = PyLong_AsVoidPtr(clientppy);
+    int num_vars;
+    char **var_names = NULL;
+    PyObject *var_list;
+    PyObject *name;
+    int i;
+
+    num_vars = dspaces_get_var_names(*clientp, &var_names);
+    if(num_vars < 0) {
+        return (NULL);
+    }
+
+    var_list = PyList_New(0);
+    for(i = 0; i < num_vars; i++) {
+        name = PyUnicode_DecodeASCII(var_names[i], strlen(var_names[i]), NULL);
+        if(name) {
+            PyList_Append(var_list, name);
+        }
+        free(var_names[i]);
+    }
+
+    if(num_vars) {
+        free(var_names);
+    }
+
+    return (var_list);
+}
+
+PyObject *wrapper_dspaces_get_var_objs(PyObject *clientppy, const char *name)
+{
+    dspaces_client_t *clientp = PyLong_AsVoidPtr(clientppy);
+    int num_obj;
+    dspaces_obj_t *objs, *obj;
+    PyObject *obj_list;
+    PyObject *pobj, *lbt, *ubt;
+    int i, j;
+
+    num_obj = dspaces_get_var_objs(*clientp, name, &objs);
+    if(num_obj < 0) {
+        return (NULL);
+    }
+
+    obj_list = PyList_New(0);
+    for(i = 0; i < num_obj; i++) {
+        obj = &objs[i];
+        pobj = PyDict_New();
+        PyDict_SetItemString(
+            pobj, "name",
+            PyUnicode_DecodeASCII(obj->name, strlen(obj->name), NULL));
+        PyDict_SetItemString(pobj, "version", PyLong_FromLong(obj->version));
+        lbt = PyTuple_New(obj->ndim);
+        ubt = PyTuple_New(obj->ndim);
+        for(j = 0; j < obj->ndim; j++) {
+            PyTuple_SetItem(lbt, j, PyLong_FromLong(obj->lb[j]));
+            PyTuple_SetItem(ubt, j, PyLong_FromLong(obj->ub[j]));
+        }
+        PyDict_SetItemString(pobj, "lb", lbt);
+        PyDict_SetItemString(pobj, "ub", ubt);
+        PyList_Append(obj_list, pobj);
+        free(obj->name);
+        free(obj->lb);
+        free(obj->ub);
+    }
+
+    return (obj_list);
 }
 
 PyObject *wrapper_dspaces_ops_new_iconst(long val)
@@ -321,7 +428,7 @@ PyObject *wrapper_dspaces_ops_new_iconst(long val)
 
     PyObject *expr = PyLong_FromVoidPtr((void *)exprp);
 
-    return(expr);
+    return (expr);
 }
 
 PyObject *wrapper_dspaces_ops_new_rconst(double val)
@@ -334,10 +441,12 @@ PyObject *wrapper_dspaces_ops_new_rconst(double val)
 
     PyObject *expr = PyLong_FromVoidPtr((void *)exprp);
 
-    return(expr);
+    return (expr);
 }
 
-PyObject *wrapper_dspaces_ops_new_obj(PyObject *clientppy, const char *name, int version, PyObject *lbt, PyObject *ubt, PyObject *dtype)
+PyObject *wrapper_dspaces_ops_new_obj(PyObject *clientppy, const char *name,
+                                      int version, PyObject *lbt, PyObject *ubt,
+                                      PyObject *dtype)
 {
     dspaces_client_t *clientp = PyLong_AsVoidPtr(clientppy);
     ds_expr_t *exprp;
@@ -359,7 +468,7 @@ PyObject *wrapper_dspaces_ops_new_obj(PyObject *clientppy, const char *name, int
         val_type = DS_VAL_INT;
     } else {
         PyErr_SetString(PyExc_TypeError, "type must be int or float");
-        return(NULL);
+        return (NULL);
     }
 
     for(i = 0; i < ndim; i++) {
@@ -370,10 +479,11 @@ PyObject *wrapper_dspaces_ops_new_obj(PyObject *clientppy, const char *name, int
     }
 
     exprp = malloc(sizeof(*exprp));
-    *exprp = dspaces_op_new_obj(*clientp, name, version, val_type, ndim, lb, ub);
+    *exprp =
+        dspaces_op_new_obj(*clientp, name, version, val_type, ndim, lb, ub);
     expr = PyLong_FromVoidPtr((void *)exprp);
 
-    return(expr);
+    return (expr);
 }
 
 PyObject *wrapper_dspaces_op_new_add(PyObject *exprppy1, PyObject *exprppy2)
@@ -388,7 +498,7 @@ PyObject *wrapper_dspaces_op_new_add(PyObject *exprppy1, PyObject *exprppy2)
     *resp = dspaces_op_new_add(*exprp1, *exprp2);
     res = PyLong_FromVoidPtr((void *)resp);
 
-    return(res);
+    return (res);
 }
 
 PyObject *wrapper_dspaces_op_new_sub(PyObject *exprppy1, PyObject *exprppy2)
@@ -403,7 +513,7 @@ PyObject *wrapper_dspaces_op_new_sub(PyObject *exprppy1, PyObject *exprppy2)
     *resp = dspaces_op_new_sub(*exprp1, *exprp2);
     res = PyLong_FromVoidPtr((void *)resp);
 
-    return(res);
+    return (res);
 }
 
 PyObject *wrapper_dspaces_op_new_mult(PyObject *exprppy1, PyObject *exprppy2)
@@ -418,7 +528,7 @@ PyObject *wrapper_dspaces_op_new_mult(PyObject *exprppy1, PyObject *exprppy2)
     *resp = dspaces_op_new_mult(*exprp1, *exprp2);
     res = PyLong_FromVoidPtr((void *)resp);
 
-    return(res);
+    return (res);
 }
 
 PyObject *wrapper_dspaces_op_new_div(PyObject *exprppy1, PyObject *exprppy2)
@@ -433,7 +543,7 @@ PyObject *wrapper_dspaces_op_new_div(PyObject *exprppy1, PyObject *exprppy2)
     *resp = dspaces_op_new_div(*exprp1, *exprp2);
     res = PyLong_FromVoidPtr((void *)resp);
 
-    return(res);
+    return (res);
 }
 
 PyObject *wrapper_dspaces_op_new_pow(PyObject *exprppy1, PyObject *exprppy2)
@@ -448,7 +558,7 @@ PyObject *wrapper_dspaces_op_new_pow(PyObject *exprppy1, PyObject *exprppy2)
     *resp = dspaces_op_new_pow(*exprp1, *exprp2);
     res = PyLong_FromVoidPtr((void *)resp);
 
-    return(res);
+    return (res);
 }
 
 PyObject *wrapper_dspaces_op_new_arctan(PyObject *exprppy1)
@@ -462,7 +572,7 @@ PyObject *wrapper_dspaces_op_new_arctan(PyObject *exprppy1)
     *resp = dspaces_op_new_arctan(*exprp1);
     res = PyLong_FromVoidPtr((void *)resp);
 
-    return(res);
+    return (res);
 }
 
 PyObject *wrapper_dspaces_ops_calc(PyObject *clientppy, PyObject *exprppy)
@@ -487,14 +597,16 @@ PyObject *wrapper_dspaces_ops_calc(PyObject *clientppy, PyObject *exprppy)
         if(etype == DS_VAL_INT) {
             int_res = *(long *)result_buf;
             free(result_buf);
-            return(PyLong_FromLong(int_res));
+            return (PyLong_FromLong(int_res));
         } else if(etype == DS_VAL_REAL) {
             real_res = *(double *)result_buf;
             free(result_buf);
-            return(PyFloat_FromDouble(real_res));
+            return (PyFloat_FromDouble(real_res));
         } else {
-            PyErr_SetString(PyExc_TypeError, "invalid type assigned to expression (corruption?)");
-            return(NULL);
+            PyErr_SetString(
+                PyExc_TypeError,
+                "invalid type assigned to expression (corruption?)");
+            return (NULL);
         }
     }
     array_dims = malloc(sizeof(*array_dims) * ndim);
@@ -507,9 +619,10 @@ PyObject *wrapper_dspaces_ops_calc(PyObject *clientppy, PyObject *exprppy)
     } else if(etype == DS_VAL_REAL) {
         typenum = NPY_FLOAT64;
     } else {
-        PyErr_SetString(PyExc_TypeError, "invalid type assigned to expression (corruption?)");
-        return(NULL);
+        PyErr_SetString(PyExc_TypeError,
+                        "invalid type assigned to expression (corruption?)");
+        return (NULL);
     }
     arr = PyArray_SimpleNewFromData(ndim, array_dims, typenum, result_buf);
-    return(arr);
+    return (arr);
 }
