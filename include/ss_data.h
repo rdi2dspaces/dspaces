@@ -22,8 +22,10 @@
 
 #include <abt.h>
 
+#ifdef HAVE_CUDA
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+#endif /* HAVE_CUDA */
 
 #define MAX_VERSIONS 10
 
@@ -432,8 +434,11 @@ void ssd_free(struct sspace *);
 void matrix_init(struct matrix *, enum storage_type, struct bbox *, struct bbox *, void *, size_t);
 
 int ssd_copy(struct obj_data *, struct obj_data *);
+
+#ifdef HAVE_CUDA
 int ssd_copy_cuda(struct obj_data *, struct obj_data *);
 int ssd_copy_cuda_async(struct obj_data *, struct obj_data *, cudaStream_t *stream);
+#endif /* HAVE_CUDA*/
 //
 long ssh_hash_elem_count(struct sspace *ss, const struct bbox *bb);
 //
@@ -470,16 +475,19 @@ int ls_find_all_no_version(ss_storage *ls, const char *var_name,
 int ls_find_all(ss_storage *ls, obj_descriptor *odsc, struct obj_data ***ods);
 
 struct obj_data *obj_data_alloc(obj_descriptor *);
-struct obj_data *obj_data_alloc_cuda(obj_descriptor *);
 struct obj_data *obj_data_alloc_no_data(obj_descriptor *, void *);
 struct obj_data *obj_data_alloc_with_data(obj_descriptor *, void *);
 
 void meta_data_free(struct meta_data *mdata);
 
 void obj_data_free(struct obj_data *od);
-void obj_data_free_cuda(struct obj_data *od);
 uint64_t obj_data_size(obj_descriptor *);
 void obj_data_resize(obj_descriptor *obj_desc, uint64_t *new_dims);
+
+#ifdef HAVE_CUDA
+struct obj_data *obj_data_alloc_cuda(obj_descriptor *);
+void obj_data_free_cuda(struct obj_data *od);
+#endif /* HAVE_CUDA */
 
 int obj_desc_equals(obj_descriptor *, obj_descriptor *);
 int obj_desc_equals_no_owner(const obj_descriptor *, const obj_descriptor *);

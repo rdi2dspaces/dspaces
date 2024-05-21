@@ -20,11 +20,14 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <cuda.h>
-#include <cuda_runtime_api.h>
 #include <sys/time.h>
 #include <math.h>
 #include <stdbool.h>
+
+#ifdef HAVE_CUDA
+#include <cuda.h>
+#include <cuda_runtime_api.h>
+#endif /* HAVE_CUDA */
 
 #ifdef HAVE_DRC
 #include <rdmacred.h>

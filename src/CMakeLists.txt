@@ -1,7 +1,7 @@
 find_package(DRC)
 if(HAVE_DRC)
     include_directories(${DRC_INCLUDE_DIRS})
-    add_definitions( -DHAVE_DRC)
+    add_definitions(-DHAVE_DRC)
 endif()
 
 # default: No CUDA
@@ -25,11 +25,10 @@ else()
 endif()
 
 # list of source files
+set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c dspaces-ops.c)
 if(HAVE_CUDA)
-    set(dspaces-src util.c bbox.c ssd_copy.cu ss_data_cuda.c ss_data.c dspaces-client.c dspaces-ops.c)
+    list(APPEND dspaces-src  ssd_copy.cu ss_data_cuda.c)
     set_source_files_properties(ssd_copy.cu PROPERTIES LANGUAGE "CUDA")
-else()
-    set(dspaces-src util.c bbox.c ss_data.c dspaces-client.c dspaces-ops.c)
 endif()
 
 # load package helper for generating cmake CONFIG packages

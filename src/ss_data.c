@@ -45,7 +45,6 @@
 #include <errno.h>
 #include <math.h>
 #include "dspaces-common.h"
-#include <cuda_runtime_api.h>
 
 #include <abt.h>
 
