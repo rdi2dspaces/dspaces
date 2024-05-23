@@ -48,7 +48,7 @@ endif()
 # ${CUDA_LIBRARIES} returned by find_package(CUDA) only has the cuda runtime libs
 # so we have to manually add -lcuda
 
-target_link_libraries (dspaces margo m pthread)
+target_link_libraries (dspaces margo m pthread liblz4)
 target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include>)
 
 if(HAVE_DRC)
@@ -78,14 +78,14 @@ set_target_properties (dspaces
 set(dspaces-server-src util.c bbox.c ss_data.c dspaces-server.c toml.c)
 
 add_library(dspaces-server ${dspaces-server-src} ${dspaces-src})
+
+target_link_libraries (dspaces-server margo m pthread liblz4 ${CURL_LIBRARIES})
+target_include_directories (dspaces-server BEFORE PUBLIC
+$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> ${CURL_INCLUDE_DIR})
+
 if(HAVE_DRC)
-    target_link_libraries (dspaces-server margo m pthread ${DRC_LIBRARIES} liblz4 ${CURL_LIBRARIES})
-    target_include_directories (dspaces-server BEFORE PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> ${DRC_INCLUDE_DIRS} ${CURL_INCLUDE_DIR})
-else()
-    target_link_libraries (dspaces-server margo m pthread liblz4 ${CURL_LIBRARIES})
-    target_include_directories (dspaces-server BEFORE PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> ${CURL_INCLUDE_DIR})
+    target_link_libraries (dspaces-server ${DRC_LIBRARIES})
+    target_include_directories (dspaces-server BEFORE PUBLIC ${DRC_INCLUDE_DIRS})
 endif()
 
 if(Python_FOUND)
