@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2024, Scientific Computing and Imaging Institute, University of Utah
+ *
+ * See COPYRIGHT in top-level directory.
+ */
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 #include "ss_data.h"

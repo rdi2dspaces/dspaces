@@ -38,6 +38,9 @@
  *
  *  Philip Davis (2023) University of Utah
  *  philip.davis@sci.utah.edu
+ * 
+ *  Bo Zhang (2024) SCI Institute, University of Utah
+ *  bozhang@sci.utah.edu
  */
 
 #include "ss_data.h"

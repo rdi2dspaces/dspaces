@@ -32,8 +32,12 @@
 /*
  *  Ciprian Docan (2009)  TASSL Rutgers University
  *  docan@cac.rutgers.edu
+ * 
  *  Tong Jin (2011) TASSL Rutgers University
  *  tjin@cac.rutgers.edu
+ * 
+ *  Bo Zhang (2024) SCI Institute, University of Utah
+ *  bozhang@sci.utah.edu
  */
 
 #include <stdarg.h>
