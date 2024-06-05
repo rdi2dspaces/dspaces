@@ -38,34 +38,18 @@
  *
  *  Philip Davis (2023) University of Utah
  *  philip.davis@sci.utah.edu
+ * 
+ *  Bo Zhang (2024) SCI Institute, University of Utah
+ *  bozhang@sci.utah.edu
  */
 
 #include "ss_data.h"
 #include "queue.h"
 #include <errno.h>
 #include <math.h>
+#include "dspaces-common.h"
 
 #include <abt.h>
-
-/*
-  A view in  the matrix allows to extract any subset  of values from a
-  matrix.
-*/
-
-struct matrix_view {
-    uint64_t lb[BBOX_MAX_NDIM];
-    uint64_t ub[BBOX_MAX_NDIM];
-};
-
-/* Generic matrix representation. */
-struct matrix {
-    uint64_t dist[BBOX_MAX_NDIM];
-    int num_dims;
-    size_t size_elem;
-    enum storage_type mat_storage;
-    struct matrix_view mat_view;
-    void *pdata;
-};
 
 /*
   Cache structure to "map" a bounding box to corresponding nodes in
@@ -640,9 +624,9 @@ int ssd_hash_v2(struct sspace *ss, const struct bbox *bb,
     return num_nodes;
 }
 
-static void matrix_init(struct matrix *mat, enum storage_type st,
-                        struct bbox *bb_glb, struct bbox *bb_loc, void *pdata,
-                        size_t se)
+void matrix_init(struct matrix *mat, enum storage_type st,
+                 struct bbox *bb_glb, struct bbox *bb_loc, void *pdata,
+                 size_t se)
 {
     int i;
     int ndims = bb_glb->num_dims;

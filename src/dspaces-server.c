@@ -1072,9 +1072,9 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     hg_bool_t flag;
     hg_id_t id;
     int num_handlers = DSPACES_DEFAULT_NUM_HANDLERS;
-    struct hg_init_info hii = {0};
+    struct hg_init_info hii = HG_INIT_INFO_INITIALIZER;
     char margo_conf[1024];
-    struct margo_init_info mii = {0};
+    struct margo_init_info mii = MARGO_INIT_INFO_INITIALIZER;
     int i, ret;
 
     if(is_initialized) {
@@ -1115,7 +1115,7 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
             "{ \"use_progress_thread\" : true, \"rpc_thread_count\" : %d }",
             num_handlers);
     hii.request_post_init = 1024;
-    hii.auto_sm = 0;
+    hii.auto_sm = false;    
     mii.hg_init_info = &hii;
     mii.json_config = margo_conf;
     ABT_init(0, NULL);
@@ -1150,7 +1150,6 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     drc_cookie = drc_get_first_cookie(drc_credential_info);
     sprintf(drc_key_str, "%u", drc_cookie);
 
-    memset(&hii, 0, sizeof(hii));
     hii.na_init_info.auth_key = drc_key_str;
 
     /* rank 0 grants access to the credential, allowing other jobs to use it */
