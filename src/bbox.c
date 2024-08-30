@@ -99,7 +99,7 @@ void bbox_divide(struct bbox *b0, struct bbox *b_tab)
 /*
    Test if bounding box b0 includes b1 along dimension dim.
 */
-static inline int bbox_include_ondim(const struct bbox *b0,
+int bbox_include_ondim(const struct bbox *b0,
                                      const struct bbox *b1, int dim)
 {
     if((b0->lb.c[dim] <= b1->lb.c[dim]) && (b0->ub.c[dim] >= b1->ub.c[dim]))
