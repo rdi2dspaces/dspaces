@@ -60,6 +60,9 @@ struct ds_gspace {
     /* Pending object descriptors for draining. */
     struct list_head obj_desc_drain_list;
 
+    /* List of object data for swap out */
+    struct list_head ls_od_list;
+
     int rank;
     int size_sp;
     char **server_address;

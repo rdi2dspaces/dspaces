@@ -24,7 +24,8 @@ extern "C" {
 #define dspaces_ERR_UNKNOWN_PR -7  /* Could not find server */
 #define dspaces_ERR_UNKNOWN_OBJ -8 /* Could not find the object*/
 #define dspaces_ERR_END -9         /* End of range for valid error codes */
-#define dspaces_ERR_HDF5 -12
+#define dspaces_ERR_UTILS -12
+#define dspaces_ERR_HDF5 -13
 
 #define DS_OBJ_RESIZE 0x02
 

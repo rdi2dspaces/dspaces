@@ -13,6 +13,8 @@
 #include "ss_data.h"
 #include "str_hash.h"
 #include "toml.h"
+#include "file_storage/policy.h"
+#include "file_storage/file_hdf5.h"
 #include <abt.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -173,6 +175,8 @@ struct dspaces_provider {
 
     struct remote *remotes;
     int nremote;
+
+    struct swap_config swap_conf;
 };
 
 DECLARE_MARGO_RPC_HANDLER(put_rpc)
@@ -312,7 +316,7 @@ static int parse_conf(const char *fname)
 }
 
 static int parse_conf_toml(const char *fname, struct list_head *dir_list,
-                           struct remote **rem_array, int *nremote)
+                           struct remote **rem_array, int *nremote, struct swap_config *swap)
 {
     FILE *fin;
     toml_table_t *conf;
@@ -321,6 +325,7 @@ static int parse_conf_toml(const char *fname, struct list_head *dir_list,
     toml_table_t *server;
     toml_table_t *remotes;
     toml_table_t *remote;
+    toml_table_t *swapspace;
     toml_datum_t dat;
     toml_array_t *arr;
     struct dspaces_dir *dir;
@@ -437,6 +442,45 @@ static int parse_conf_toml(const char *fname, struct list_head *dir_list,
                 }
             }
             list_add(&dir->entry, dir_list);
+        }
+    }
+
+    swapspace = toml_table_in(conf, "swap space");
+    if(swapspace) {
+        dat = toml_string_in(swapspace, "directory");
+        if(dat.ok) {
+            swap->file_dir = strdup(dat.u.s);
+            free(dat.u.s);
+        } else{
+            swap->file_dir = strdup("./swap/");
+        }
+        dat = toml_string_in(swapspace, "memory quota");
+        if(dat.ok) {
+            memory_quota_parser(dat.u.s, swap);
+            free(dat.u.s);
+        } else{
+            swap->mem_quota_type = 1;
+            swap->mem_quota.percent = 1.0;
+        }
+        dat = toml_string_in(swapspace, "policy");
+        if(dat.ok) {
+            if(policy_str_check(dat.u.s)) {
+                swap->policy = strdup(dat.u.s);
+            } else {
+                swap->policy = strdup("Default");
+                fprintf(stderr, "WARNING: Swap Policy: %s is not supported. "
+                                "Use FIFO policy as default.\n", dat.u.s);
+            }
+            free(dat.u.s);
+        } else {
+            swap->policy = strdup("Default");
+        }
+        dat = toml_string_in(swapspace, "disk quota");
+        if(dat.ok) {
+            disk_quota_parser(dat.u.s, swap);
+            free(dat.u.s);
+        } else {
+            swap->disk_quota_MB = -1.0;
         }
     }
 
@@ -638,7 +682,7 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
         err = parse_conf(conf_name);
     } else {
         err = parse_conf_toml(conf_name, &server->dirs, &server->remotes,
-                              &server->nremote);
+                              &server->nremote, &server->swap_conf);
     }
     if(err < 0) {
         goto err_out;
@@ -701,6 +745,8 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
         fprintf(stderr, "%s(): ERROR ls_alloc() failed\n", __func__);
         goto err_free;
     }
+
+    INIT_LIST_HEAD(&dsg_l->ls_od_list);
 
     // proxy storage
     dsg_l->ps = ls_alloc(ds_conf.max_versions);
@@ -1505,6 +1551,7 @@ static int server_destroy(dspaces_provider_t server)
     }
 
     free_sspace(server->dsg);
+    free_ls_od_list(&server->dsg->ls_od_list);
     ls_free(server->dsg->ls);
     free(server->dsg);
     free(server->server_address[0]);
@@ -1586,6 +1633,32 @@ static void put_rpc(hg_handle_t handle)
     // set the owner to be this server address
     odsc_take_ownership(server, &in_odsc);
 
+    /* Check if needs to swap data out to HDF5*/
+    uint64_t size_MB = obj_data_size(&in_odsc) >> 20;
+    struct obj_data_ptr_flat_list_entry *swap_od_entry;
+    struct obj_data *swap_od;
+
+    while(need_swap_out(&server->swap_conf, size_MB)) {
+        /* Find the od that we want to swap out */
+        ABT_mutex_lock(server->ls_mutex);
+        swap_od = which_swap_out(&server->swap_conf, &server->dsg->ls_od_list);
+        ABT_mutex_unlock(server->ls_mutex);
+        // swap_od = swap_od_entry->od;
+        
+        /* Write od to HDF5 */
+        hdf5_write_od(server->swap_conf.file_dir, swap_od);
+
+        /* Delete the od from both the local stroage list & flat list */
+        ABT_mutex_lock(server->ls_mutex);
+        ls_remove(server->dsg->ls, swap_od);
+        list_del(&swap_od->flat_list_entry.entry);
+        ABT_mutex_unlock(server->ls_mutex);
+
+        /* Free od */
+        obj_data_free(swap_od);
+        // free(swap_od_entry);
+    }
+    
     struct obj_data *od;
     od = obj_data_alloc(&in_odsc);
     memcpy(&od->gdim, in.odsc.raw_gdim, sizeof(struct global_dimension));
@@ -1636,6 +1709,9 @@ static void put_rpc(hg_handle_t handle)
 
     ABT_mutex_lock(server->ls_mutex);
     ls_add_obj(server->dsg->ls, od);
+    /* add obj_data to the flat od_list for swap out */
+    // struct obj_data_ptr_flat_list_entry *od_flat_entry = ls_flat_od_list_entry_alloc(od);
+    list_add_tail(&od->flat_list_entry.entry, &server->dsg->ls_od_list);
     ABT_mutex_unlock(server->ls_mutex);
 
     DEBUG_OUT("Received obj %s\n", obj_desc_sprint(&od->obj_desc));
@@ -2723,20 +2799,52 @@ static void get_rpc(hg_handle_t handle)
 
     DEBUG_OUT("received get request\n");
 
-    struct obj_data *od, *from_obj;
+    struct obj_data_ptr_flat_list_entry *swap_od_entry;
+    struct obj_data *od, *from_obj, *swap_od;
+
+    while(!(od = obj_data_alloc(&in_odsc))) {
+        /* Failed to allocate od, the primary reason is insufficient memory.
+         * Find the od that we want to swap out */
+        ABT_mutex_lock(server->ls_mutex);
+        swap_od = which_swap_out(&server->swap_conf, &server->dsg->ls_od_list);
+        ABT_mutex_unlock(server->ls_mutex);
+        // swap_od = swap_od_entry->od;
+
+        /* Write od to HDF5 */
+        hdf5_write_od(server->swap_conf.file_dir, swap_od);
+
+        /* Delete the od from both the local stroage list & flat list */
+        ABT_mutex_lock(server->ls_mutex);
+        ls_remove(server->dsg->ls, swap_od);
+        list_del(&swap_od->flat_list_entry.entry);
+        
+        ABT_mutex_unlock(server->ls_mutex);
+        /* Free od */
+        obj_data_free(swap_od);
+        // free(swap_od_entry);
+    }
+    DEBUG_OUT("allocated target object\n");
 
     ABT_mutex_lock(server->ls_mutex);
     if(server->remotes && ls_lookup(server->dsg->ps, in_odsc.name)) {
-        from_obj = ls_find(server->dsg->ps, &in_odsc);
+        from_obj = ls_find_include(server->dsg->ps, &in_odsc);
     } else {
-        from_obj = ls_find(server->dsg->ls, &in_odsc);
+        from_obj = ls_find_include(server->dsg->ls, &in_odsc);
     }
-    DEBUG_OUT("found source data object\n");
-    od = obj_data_alloc(&in_odsc);
-    DEBUG_OUT("allocated target object\n");
-    ssd_copy(od, from_obj);
-    DEBUG_OUT("copied object data\n");
+    if(from_obj) {
+        DEBUG_OUT("found source data object from staging memory\n");
+        ssd_copy(od, from_obj);
+        DEBUG_OUT("copied object data\n");
+        from_obj->flat_list_entry.usecnt++;
+    }
     ABT_mutex_unlock(server->ls_mutex);
+
+    if(!from_obj) {
+        /* Did not find the from_obj from staging memory, 
+         * search it in the swap space */
+        hdf5_read_od(server->swap_conf.file_dir, od);
+    }
+
     hg_size_t size = (in_odsc.size) * bbox_volume(&(in_odsc.bb));
     void *buffer = (void *)od->data;
     cbuffer = malloc(size);
@@ -2787,7 +2895,21 @@ static void get_rpc(hg_handle_t handle)
     margo_bulk_free(bulk_handle);
     out.ret = dspaces_SUCCESS;
     out.len = csize;
-    obj_data_free(od);
+    /* If we read the od back from the swap space, 
+     * then we keep it in the staging memory */
+    struct obj_data_ptr_flat_list_entry *od_flat_entry;
+    if(from_obj) {
+        obj_data_free(od);
+    } else {
+        /* We add the read-back od to the local storage */
+        ABT_mutex_lock(server->ls_mutex);
+        ls_add_obj(server->dsg->ls, od);
+        /* add obj_data to the flat od_list for swap out */
+        // od_flat_entry = ls_flat_od_list_entry_alloc(od);
+        od->flat_list_entry.usecnt++;
+        list_add_tail(&od->flat_list_entry.entry, &server->dsg->ls_od_list);
+        ABT_mutex_unlock(server->ls_mutex);
+    }
     margo_respond(handle, &out);
     margo_free_input(handle, &in);
     margo_destroy(handle);

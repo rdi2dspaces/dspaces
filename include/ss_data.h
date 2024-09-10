@@ -65,8 +65,15 @@ struct global_dimension {
     struct coord sizes;
 };
 
+struct flat_od_list_info {
+    struct list_head entry;
+    int usecnt;
+};
+
 struct obj_data {
     struct list_head obj_entry;
+
+    struct flat_od_list_info flat_list_entry;
 
     obj_descriptor obj_desc;
 
@@ -82,6 +89,9 @@ struct obj_data {
 
     /* Flag to mark if we should free this data object. */
     unsigned int f_free : 1;
+
+    /* Reference to the flat od list in local storage; Used for advanced swap policy */
+    struct obj_data_ptr_flat_list_entry* ls_od_entry;
 };
 
 struct gdim_list_entry {
@@ -438,6 +448,7 @@ struct obj_data *ls_lookup(ss_storage *, char *);
 void ls_remove(ss_storage *, struct obj_data *);
 void ls_try_remove_free(ss_storage *, struct obj_data *);
 struct obj_data *ls_find(ss_storage *, obj_descriptor *);
+struct obj_data *ls_find_include(ss_storage *, obj_descriptor *);
 struct obj_data *ls_find_od(ss_storage *, obj_descriptor *);
 int ls_find_ods(ss_storage *ls, obj_descriptor *odsc, obj_descriptor ***od_tab);
 struct obj_data *ls_find_no_version(ss_storage *, obj_descriptor *);
@@ -459,10 +470,11 @@ void obj_data_resize(obj_descriptor *obj_desc, uint64_t *new_dims);
 int obj_desc_equals(obj_descriptor *, obj_descriptor *);
 int obj_desc_equals_no_owner(const obj_descriptor *, const obj_descriptor *);
 
-int obj_desc_equals_intersect(obj_descriptor *odsc1, obj_descriptor *odsc2);
+int obj_desc_equals_intersect(const obj_descriptor *odsc1, const obj_descriptor *odsc2);
 
 int obj_desc_by_name_intersect(const obj_descriptor *odsc1,
                                const obj_descriptor *odsc2);
+int obj_desc_equals_include(const obj_descriptor *odsc1, const obj_descriptor *odsc2);
 
 // void copy_global_dimension(struct global_dimension *l, int ndim, const
 // uint64_t *gdim);
