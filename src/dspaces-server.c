@@ -17,6 +17,7 @@
 #include "ss_data.h"
 #include "str_hash.h"
 #include "toml.h"
+#include "util.h"
 #include "file_storage/policy.h"
 #include "file_storage/file_hdf5.h"
 #include <abt.h>
@@ -1226,6 +1227,7 @@ static int server_destroy(dspaces_provider_t server)
     }
 
     free_sspace(server->dsg);
+    remove_dir_rf(server->conf.swap.file_dir);
     free_ls_od_list(&server->dsg->ls_od_list);
     ls_free(server->dsg->ls);
     free(server->dsg);
@@ -1318,14 +1320,11 @@ static void put_rpc(hg_handle_t handle)
             ABT_mutex_lock(server->ls_mutex);
             swap_od = which_swap_out(&server->conf.swap, &server->dsg->ls_od_list);
             ABT_mutex_unlock(server->ls_mutex);
-
-            hdf5_write_od(server->conf.swap.file_dir, swap_od);
-
+            hdf5_write_od(&server->conf.swap, swap_od);
             ABT_mutex_lock(server->ls_mutex);
             ls_remove(server->dsg->ls, swap_od);
             list_del(&swap_od->flat_list_entry.entry);
             ABT_mutex_unlock(server->ls_mutex);
-
             obj_data_free(swap_od);
         }
     } else {
@@ -1337,7 +1336,7 @@ static void put_rpc(hg_handle_t handle)
         // swap_od = swap_od_entry->od;
         
         /* Write od to HDF5 */
-        hdf5_write_od(server->conf.swap.file_dir, swap_od);
+        hdf5_write_od(&server->conf.swap, swap_od);
 
         /* Delete the od from both the local stroage list & flat list */
         ABT_mutex_lock(server->ls_mutex);
@@ -2249,7 +2248,7 @@ static void get_rpc(hg_handle_t handle)
         // swap_od = swap_od_entry->od;
 
         /* Write od to HDF5 */
-        hdf5_write_od(server->conf.swap.file_dir, swap_od);
+        hdf5_write_od(&server->conf.swap, swap_od);
 
         /* Delete the od from both the local stroage list & flat list */
         ABT_mutex_lock(server->ls_mutex);
@@ -2280,7 +2279,7 @@ static void get_rpc(hg_handle_t handle)
     if(!from_obj) {
         /* Did not find the from_obj from staging memory, 
          * search it in the swap space */
-        hdf5_read_od(server->conf.swap.file_dir, od);
+        hdf5_read_od(&server->conf.swap, od);
     }
 
     hg_size_t size = (in_odsc.size) * bbox_volume(&(in_odsc.bb));
