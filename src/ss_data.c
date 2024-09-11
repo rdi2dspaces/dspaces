@@ -807,9 +807,10 @@ char *obj_desc_sprint(obj_descriptor *odsc)
                         "\t.version = %d,\n"
                         "\t.size = %i,\n"
                         "\t.tag = %i,\n"
+                        "\t.type = %i,\n"
                         "\t.bb = ",
                         odsc->name, odsc->owner, odsc->version, odsc->size,
-                        odsc->tag);
+                        odsc->tag, odsc->type);
     str = str_append_const(str_append(str, bbox_sprint(&odsc->bb)), "}\n");
 
     return str;
@@ -822,6 +823,7 @@ int ssd_copy(struct obj_data *to_obj, struct obj_data *from_obj)
     int copied_elems = 0;
 
     to_obj->obj_desc.tag = from_obj->obj_desc.tag;
+    to_obj->obj_desc.type = from_obj->obj_desc.type;
     bbox_intersect(&to_obj->obj_desc.bb, &from_obj->obj_desc.bb, &bbcom);
 
     matrix_init(&from_mat, from_obj->obj_desc.st, &from_obj->obj_desc.bb,
@@ -988,9 +990,6 @@ void ls_add_obj(ss_storage *ls, struct obj_data *od)
     struct list_head *bin;
     struct obj_data *od_existing;
 
-    // ABT_rwlock_create(&od->lock);
-    // ABT_rwlock_wrlock(&od->lock);
-
     // duplicate is noop
     ds_str_hash_add(ls->var_dict, od->obj_desc.name);
 
@@ -1010,7 +1009,6 @@ void ls_add_obj(ss_storage *ls, struct obj_data *od)
     /* NOTE: new object comes first in the list. */
     list_add(&od->obj_entry, bin);
     ls->num_obj++;
-    // ABT_rwlock_unlock(&od->lock);
 }
 
 struct obj_data *ls_lookup(ss_storage *ls, char *name)
@@ -1409,7 +1407,7 @@ int ssd_choose_hash(const struct bbox *bb_domain)
     uint64_t x;
     int i;
 
-    if(bb_domain->num_dims == 1 && bb_domain->ub.c[i] == 0) {
+    if(bb_domain->num_dims == 1 && bb_domain->ub.c[0] == 0) {
         // flag for no hashing
         return (ssd_hash_version_v0);
     }
@@ -1838,7 +1836,7 @@ int dht_find_entry_all(struct dht_entry *de, obj_descriptor *q_odsc,
     long num_elem;
     struct obj_desc_list *odscl;
     struct bbox isect;
-    int sub = timeout != 0 && de == de->ss->ent_self;
+    int sub = (timeout == -1 && de == de->ss->ent_self);
 
     n = q_odsc->version % de->odsc_size;
     num_elem = ssh_hash_elem_count(de->ss, &q_odsc->bb);

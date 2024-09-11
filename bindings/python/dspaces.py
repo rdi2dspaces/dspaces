@@ -3,6 +3,7 @@ from dspaces.dspaces_wrapper import *
 import numpy as np
 import dill as pickle
 from inspect import signature
+import json
 
 @dataclass
 class DSObject:
@@ -18,6 +19,23 @@ class DSObject:
             'lb': self.lb,
             'ub': self.ub
         })
+
+@dataclass
+class DSRegHandle:
+    namespace: str
+    parameters: dict
+
+class DSModuleError(Exception):
+    def __init__(self, errno):
+        self.errno = errno
+
+class DSRemoteFaultError(Exception):
+    def __init__(self, errno):
+        self.errno = errno
+
+class DSConnectionError(Exception):
+    def __init__(self, errno):
+        self.errno = errno
 
 class DSServer:
     def __init__(self, conn = "sockets", comm = None, conf = "dataspaces.conf"):
@@ -51,7 +69,8 @@ class DSClient:
                 self.client = wrapper_dspaces_init_wan(listen_str.encode('ascii'), conn.encode('ascii'), rank)
 
     def __del__(self):
-        wrapper_dspaces_fini(self.client) 
+        if hasattr(self, 'client'):
+            wrapper_dspaces_fini(self.client) 
  
     def KillServer(self, token_count = 1):
         for token in range(token_count):
@@ -75,6 +94,22 @@ class DSClient:
         arg = DSObject(name=name, version=version, lb=lb, ub=ub)
         return(self.VecExec([arg], fn))
 
+    def Register(self, type, name, data):
+        nspace, reg_id = wrapper_dspaces_register(self.client,
+                                        type.encode('ascii'),
+                                        name.encode('ascii'),
+                                        json.dumps(data).encode('ascii'))
+        if reg_id < 0:
+            if reg_id == -3:
+                raise DSModuleError(reg_id)
+            elif reg_id == -2 or reg_id == -1 or reg_id == -4 or reg_id == -5:
+                raise DSRemoteFaultError(reg_id)
+            elif reg_id == -6:
+                raise DSConnectionError(reg_id)
+            else:
+                raise Exception("unknown failure")
+        return(DSRegHandle(nspace, {'id':str(reg_id)}))
+    
     def VecExec(self, objs:list[DSObject] = [], fn=None):
         if objs and not hasattr(objs, '__iter__'):
             raise TypeError('reqs should be a list of arguments, if present')
@@ -110,7 +145,7 @@ class DSClient:
     def GetVars(self):
         return wrapper_dspaces_get_vars(self.client)
 
-    def GetObjVars(self, var_name):
+    def GetVarObjs(self, var_name):
         ret_objs = []
         wrapper_results =  wrapper_dspaces_get_var_objs(self.client, var_name.encode('ascii'))
         for obj in wrapper_results:
@@ -177,6 +212,7 @@ class DSExpr:
         return(obj)
     def exec(self):
         return(wrapper_dspaces_ops_calc(self.client.client, self.expr))
+
 class DSConst(DSExpr):
     def __init__(self, client, val):
         DSExpr.__init__(self, client)

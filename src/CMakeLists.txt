@@ -33,24 +33,30 @@ set_target_properties (dspaces
     PROPERTIES VERSION ${dspaces_VERSION}
     SOVERSION ${dspaces_VERSION_MAJOR})
 
-set(dspaces-server-src util.c bbox.c ss_data.c dspaces-server.c toml.c file_storage/file_hdf5.c file_storage/policy.c)
+set(dspaces-server-src util.c bbox.c ss_data.c dspaces-server.c dspaces-conf.c dspaces-modules.c
+                        dspaces-logging.c toml.c file_storage/file_hdf5.c file_storage/policy.c)
 
 add_library(dspaces-server ${dspaces-server-src} ${dspaces-src})
 if(HAVE_DRC)
     target_link_libraries (dspaces-server margo m pthread ${DRC_LIBRARIES} liblz4 ${CURL_LIBRARIES} HDF5::HDF5)
     target_include_directories (dspaces-server BEFORE PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> ${DRC_INCLUDE_DIRS} ${CURL_INCLUDE_DIR})
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> ${DRC_INCLUDE_DIRS})
 else()
-    target_link_libraries (dspaces-server margo m pthread liblz4 ${CURL_LIBRARIES} HDF5::HDF5)
+    target_link_libraries (dspaces-server margo m pthread liblz4 HDF5::HDF5)
     target_include_directories (dspaces-server BEFORE PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> ${CURL_INCLUDE_DIR})
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>)
 endif()
 
+
 if(Python_FOUND)
-    message(" ${PYTHON_INCLUDE_PATH} ${_Python_NumPy_INCLUDE_DIR}")
     target_link_libraries(dspaces-server Python::Python)
     target_include_directories (dspaces-server BEFORE PUBLIC ${PYTHON_INCLUDE_PATH} ${_Python_NumPy_INCLUDE_DIR})
     target_compile_definitions(dspaces-server PRIVATE DSPACES_HAVE_PYTHON)
+endif()
+
+if(CURL_FOUND)
+    target_link_libraries(dspaces-server curl)
+    target_include_directories (dspaces-server BEFORE PUBLIC ${CURL_INCLUDE_DIR})
 endif()
 
 target_compile_definitions(dspaces-server PRIVATE DSPACES_MOD_DIR=${CMAKE_INSTALL_PREFIX}/share/modules)

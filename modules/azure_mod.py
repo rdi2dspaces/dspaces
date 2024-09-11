@@ -46,6 +46,7 @@ def _get_gddp_params(name):
     scenario = 'ssp585'
     variable = None
     var_name = name.split('\\')[-1]
+    quality = 0
     name_parts = var_name.split(',')
     for part in name_parts:
         if part[0] == 'm':
@@ -60,9 +61,11 @@ def _get_gddp_params(name):
             variable = part[2:]
             if have_pc and variable not in variable_list:
                 raise ValueError(f"variable {variable} not available.")
+        if part[0] == 'q':
+            quality = int(part[2:])
     if variable == None:
         raise ValueError('No variable name specified')
-    return model, scenario, variable
+    return model, scenario, variable, quality
 
 def _get_dataset(url):
     path = urlparse(url).path
@@ -73,6 +76,10 @@ def _get_dataset(url):
             os.makedirs(os.path.dirname(cache_entry))
         urlretrieve(url, filename=cache_entry)
     return(Dataset(cache_entry))
+
+def _get_azure_url(url, var_name):
+    ds = _get_dataset(url)
+    return(ds[var_name])
 
 def _get_cmip6_data(model, scenario, variable, start_date, end_date, lb, ub):
     result = None
@@ -99,6 +106,7 @@ def _get_cmip6_data(model, scenario, variable, start_date, end_date, lb, ub):
             url = item.assets[variable].href
             ds = _get_dataset(url)
         else:
+            # TODO - in case indexing is offline, we still want to hit the cache
             pass
         data = ds[variable]
         if result is None:
@@ -116,9 +124,21 @@ def _get_cmip6_data(model, scenario, variable, start_date, end_date, lb, ub):
         result[start_gidx:end_gidx,:,:] = data[start_iidx:end_iidx,lb[0]:ub[0],lb[1]:ub[1]]
     return(result)
 
+def validate(url, **kwargs):
+    pass
+
+def reg_query(name, version, lb, ub, params, url, var_name):
+    array = _get_azure_url(url, var_name)
+    if lb:
+        index = [ slice(lb[x], ub[x]+1) for x in range(len(lb)) ]
+    else:
+        index = [ slice(0, x) for x in array.shape]
+    return(array[index])
+
+
 def query(name, version, lb, ub):
     start_date, end_date = _get_gddp_time_ranges(version)
-    model, scenario, variable = _get_gddp_params(name)
+    model, scenario, variable, quality = _get_gddp_params(name)
     result = _get_cmip6_data(model, scenario, variable, start_date, end_date, lb, ub)
     return(result)
 
