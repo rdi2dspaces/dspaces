@@ -36,10 +36,15 @@
  *  tjin@cac.rutgers.edu
  */
 
+#define _XOPEN_SOURCE 500
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <ftw.h>
 
 #include "dspaces-common.h"
 #include "util.h"
@@ -228,6 +233,10 @@ void free_nv_pairs(struct name_value_pair *pairs)
     }
 }
 
+/*******************************************************
+   Memory Info
+**********************************************************/
+
 /* Parse the contents of /proc/meminfo (in buf), return value of "name"
  * (example: "MemTotal:")
  * Returns -errno if the entry cannot be found. */
@@ -334,4 +343,47 @@ meminfo_t parse_meminfo()
     m.SwapFreeMiB = SwapFree >> 10;
 
     return m;
+}
+
+/*******************************************************
+   Directory Opreations
+**********************************************************/
+int check_dir_exist(const char* dir_path)
+{
+    struct stat s;
+    int ret;
+    
+    if((stat(dir_path, &s) == 0) && S_ISDIR(s.st_mode))
+        return 1;
+    else
+        return 0;
+    
+}
+
+int check_dir_write_permission(const char* dir_path)
+{
+    if(access(dir_path, W_OK))
+        return 1;
+    else
+        return 0;
+}
+
+void mkdir_all_owner_permission(const char* dir_path)
+{
+    mkdir(dir_path, 0700);
+}
+
+static int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf)
+{
+    int rv = remove(fpath);
+
+    if (rv)
+        perror(fpath);
+
+    return rv;
+}
+
+int remove_dir_rf(const char *dir_path)
+{
+    return nftw(dir_path, unlink_cb, 256, FTW_DEPTH | FTW_PHYS);
 }

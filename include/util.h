@@ -2,7 +2,6 @@
 #define __DS_UTIL_H_
 
 #include <stdlib.h>
-#include <errno.h>
 
 size_t str_len(const char *str);
 char *str_append_const(char *, const char *);
@@ -58,5 +57,13 @@ typedef struct procinfo {
 } procinfo_t;
 
 meminfo_t parse_meminfo();
+
+/*******************************************************
+   Directory Opreations
+**********************************************************/
+int check_dir_exist(const char* dir_path);
+int check_dir_write_permission(const char* dir_path);
+void mkdir_all_owner_permission(const char* dir_path);
+int remove_dir_rf(const char *dir_path);
 
 #endif
