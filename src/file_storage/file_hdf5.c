@@ -5,30 +5,10 @@
 #include "string.h"
 
 #include "dspaces-common.h"
-#include "ss_data.h"
+#include "util.h"
+#include "file_storage/file_hdf5.h"
 
 #include <hdf5.h>
-
-// static hid_t dstype_to_h5type_map[] = {
-//     H5T_NATIVE_OPAQUE,  // Placeholder, not in use
-//     H5T_NATIVE_FLOAT,   // DSP_FLOAT
-//     H5T_NATIVE_INT,     // DSP_INT
-//     H5T_NATIVE_LONG,    // DSP_LONG
-//     H5T_NATIVE_DOUBLE,  // DSP_DOUBLE
-//     H5T_NATIVE_HBOOL,   // DSP_BOOL
-//     H5T_NATIVE_CHAR,    // DSP_CHAR
-//     H5T_NATIVE_UINT,    // DSP_UINT
-//     H5T_NATIVE_ULONG,   // DSP_ULONG
-//     H5T_NATIVE_B8,      // DSP_BYTE
-//     H5T_NATIVE_B8,      // DSP_UINT8
-//     H5T_NATIVE_B16,     // DSP_UINT16
-//     H5T_NATIVE_B32,     // DSP_UINT32
-//     H5T_NATIVE_B64,     // DSP_UINT64
-//     H5T_NATIVE_B8,      // DSP_INT8
-//     H5T_NATIVE_B16,     // DSP_INT16
-//     H5T_NATIVE_B32,     // DSP_INT32
-//     H5T_NATIVE_B64      // DSP_INT64
-// };
 
 static hid_t dstype_to_h5type(int type_id)
 {
@@ -137,13 +117,12 @@ static bool bbox_intersect_ondim(const struct bbox *b0, const struct bbox *b1,
         return false;
 }
 
-/*
-   Test if bounding box bbox0 includes bbox1 or bbox1 includes bbox0
-    along all dimensions. Return value could be:
-    0 - no include relationship
-    1 - bbox0 includes bbox1
-    2 - bbox1 includes bbox0
-*/
+/* Test if bounding box bbox0 includes bbox1 or bbox1 includes bbox0
+ * along all dimensions. Return value could be:
+ * 0 - no include relationship
+ * 1 - bbox0 includes bbox1
+ * 2 - bbox1 includes bbox0
+ * */
 static int bbox_can_include(struct bbox* bbox0, struct bbox* bbox1)
 {
     int ret;
@@ -178,16 +157,15 @@ static int bbox_can_include(struct bbox* bbox0, struct bbox* bbox1)
     return ret;
 }
 
-/*
-   Test if bounding box bbox0 and bbox1 can union.
-    Return value is the dimension where they can union along,
-    -1 when they cannot union.
-*/
+/* Test if bounding box bbox0 and bbox1 can union.
+ * Return value is the dimension where they can union along,
+ * -1 when they cannot union.
+ * */
 int bbox_can_union(const struct bbox* bbox0, const struct bbox* bbox1)
 {
     bool share;
     /* Two bbox can union means that they share a common
-        (n-1) dim coordinates, and has 1 dimension extended. */
+     * (n-1) dim coordinates, and has 1 dimension extended. */
     for(int i=0; i<bbox0->num_dims; i++) { // Choose 1 dimension
         // check the coordinates of the other (n-1) dimension
         share = true;
@@ -221,11 +199,10 @@ static void bbox_union_ondim(const struct bbox* bbox0, const struct bbox* bbox1,
     }
 }                                                
 
-/*
-   Test if bounding box bbox0 and bbox1 can union and
-    compute their union bbox. The result will be stored in bbox2.
-    Return value is ture when they can union, otherwise false.
-*/
+/* Test if bounding box bbox0 and bbox1 can union and
+ * compute their union bbox. The result will be stored in bbox2.
+ * Return value is ture when they can union, otherwise false.
+ * */
 static bool bbox_union(const struct bbox* bbox0, const struct bbox* bbox1, struct bbox* bbox2)
 {
     bool found = false, share;
@@ -272,9 +249,9 @@ static bool bbox_union(const struct bbox* bbox0, const struct bbox* bbox1, struc
 }
 
 /* Search the first dataset that can include the queried bbox from a HDF5 file.
-    If found, the dataset name is returned.
-    Otherwise, return NULL.                                               
-*/
+ * If found, the dataset name is returned.
+ * Otherwise, return NULL.
+ * */
 static char* hdf5_search_include_dataset(const char* file_name, hid_t file_id, struct bbox* qbbox)
 {
     herr_t status;
@@ -324,12 +301,12 @@ static char* hdf5_search_include_dataset(const char* file_name, hid_t file_id, s
 }
 
 /* Search the first dataset that can merge with queried bbox from a HDF5 file.
-    If found, the dataset name is returned through rdname.
-    Return value: -3 - Not Found
-                  -2 - Include. queried bbox is bigger
-                  -1 - Include, searched bbox is bigger
-                  Natural Numbers - Union, the union dimension                                                     
-*/
+ * If found, the dataset name is returned through rdname.
+ * Return value: -3 - Not Found
+ *               -2 - Include. queried bbox is bigger
+ *               -1 - Include, searched bbox is bigger
+ *               Natural Numbers - Union, the union dimension                                                     
+ * */
 static int hdf5_search_mergeable_dataset(const char* file_name, hid_t file_id,
                                         struct bbox* qbbox, char* rdname)
 {
@@ -378,9 +355,9 @@ static int hdf5_search_mergeable_dataset(const char* file_name, hid_t file_id,
         if(bbox_equals(qbbox, &sbbox)) continue;
 
         /* Check if the memory object & the file object can merge.
-            There are 2 cases in which 2 bbox can be merged:
-            1. bbox0 includes bbox1 or bbox1 includes bbox0
-            2. bbox0 & bbox1 can union. */
+         * There are 2 cases in which 2 bbox can be merged:
+         * 1. bbox0 includes bbox1 or bbox1 includes bbox0
+         * 2. bbox0 & bbox1 can union. */
         include = bbox_can_include(qbbox, &sbbox);
         if(include == 1) {
             rdname = dname;
@@ -401,8 +378,9 @@ static int hdf5_search_mergeable_dataset(const char* file_name, hid_t file_id,
 
 
 /* Write a data object to a HDF5 dataset.
-    The dataset name is the bbox formatted as
-    "{lb[0],lb[1], ...}-{ub[0], ub[1], ...}" */
+ * The dataset name is the bbox formatted as
+ * "{lb[0],lb[1], ...}-{ub[0], ub[1], ...}"
+ * */
 static int hdf5_write_dataset(const char* file_name, hid_t file_id, struct bbox *bboxw,
                                 int type_id, void* data)
 {
@@ -713,10 +691,11 @@ static int hdf5_write_scalar_attr(const char* file_name, hid_t file_id,
 }
 
 /* Write a dspaces obj_data to a HDF5 file.
-    The HDF5 file name is "{odsc_name}.ver%u.h5"
-    The HDF5 dataset name is the bbox formatted as
-    "{lb[0],lb[1], ...}-{ub[0], ub[1], ...}".
-    The written obj_data remains in dspaces memory after this write. */
+ * The HDF5 file name is "{odsc_name}.ver%u.h5"
+ * The HDF5 dataset name is the bbox formatted as
+ * "{lb[0],lb[1], ...}-{ub[0], ub[1], ...}".
+ * The written obj_data remains in dspaces memory after this write.
+ * */
 int hdf5_write_od(const char* file_path, struct obj_data *od)
 {
     /* We will write each version of a variable in a separate file 
@@ -746,7 +725,7 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
     }
 
     /* Try to create the file and write ndims as a file attribute.
-        Fail if the file exists. */
+     * Fail if the file exists. */
     file_id = H5Fcreate(file_name, H5F_ACC_EXCL, H5P_DEFAULT, H5P_DEFAULT);
     if(file_id != H5I_INVALID_HID) {
         ret = hdf5_write_scalar_attr(file_name, file_id, "ndims",
@@ -766,8 +745,8 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
     }
 
     /* Check if the new coming obj can be merged.
-       We have an exclusive file lock in HDF5, so this 
-       merge check will be able to find all meragble objects. */
+     * We have an exclusive file lock in HDF5, so this 
+     * merge check will be able to find all meragble objects. */
     
     search_odsc = od->obj_desc;
     union_odsc = od->obj_desc;
@@ -820,10 +799,10 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
             if(ret != dspaces_SUCCESS) return ret;
 
             /* Free the old memory data buffer and file data buffer.
-                Do not free the origin od for safety.
-                Also, delete the searched dataset from the file
-                and the query dataset if it is stored in the file.
-                Iterate the qbbox to the union bbox. */
+             * Do not free the origin od for safety.
+             * Also, delete the searched dataset from the file
+             * and the query dataset if it is stored in the file.
+             * Iterate the qbbox to the union bbox. */
             status = H5Ldelete(file_id, rdname, H5P_DEFAULT);
             if(status < 0) {
                 fprintf(stderr, "HDF5 failed to delete dataset: %s in file: %s.\n",
@@ -875,11 +854,12 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
 }
 
 /* Read a dspaces obj_data from a HDF5 file.
-    The HDF5 file name is "{odsc_name}.ver%u.h5"
-    The HDF5 dataset name is the bbox formatted as
-    "{lb[0],lb[1], ...}-{ub[0], ub[1], ...}".
-    Subset reading from a dataset is supported.
-    The data read from the HDF5 file is stored in the od->data. */
+ * The HDF5 file name is "{odsc_name}.ver%u.h5"
+ * The HDF5 dataset name is the bbox formatted as
+ * "{lb[0],lb[1], ...}-{ub[0], ub[1], ...}".
+ *  Subset reading from a dataset is supported.
+ *  The data read from the HDF5 file is stored in the od->data.
+ * */
 int hdf5_read_od(const char* file_path, struct obj_data *od)
 {
     int ret;
