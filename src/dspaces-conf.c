@@ -322,7 +322,7 @@ static void parse_swap_table(toml_table_t *swap, struct ds_conf *conf)
         conf->swap.file_dir = strdup(dat.u.s);
         free(dat.u.s);
     } else{
-        conf->swap.file_dir = strdup("./swap/");
+        conf->swap.file_dir = strdup("./dspaces_swap/");
     }
 
     dat = toml_string_in(swap, "memory quota");
@@ -359,7 +359,7 @@ static void parse_swap_table(toml_table_t *swap, struct ds_conf *conf)
 
 static inline void set_default_swap(struct ds_conf *conf)
 {
-    conf->swap.file_dir = strdup("./swap/");
+    conf->swap.file_dir = strdup("./dspaces_swap/");
     conf->swap.mem_quota_type = 1;
     conf->swap.mem_quota.percent = 1.0;
     conf->swap.policy = strdup("Default");
