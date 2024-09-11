@@ -4,6 +4,7 @@
 #include "bbox.h"
 #include "dspaces-remote.h"
 #include "list.h"
+#include "file_storage/policy.h"
 
 static char *hash_strings[] = {"Dynamic", "Unitary", "SFC", "Bisection"};
 
@@ -18,6 +19,7 @@ struct ds_conf {
     struct remote **remotes;
     int nremote;
     struct list_head *mods;
+    struct swap_config swap;
 };
 
 int parse_conf(const char *fname, struct ds_conf *conf);
