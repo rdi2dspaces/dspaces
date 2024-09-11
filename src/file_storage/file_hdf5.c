@@ -696,7 +696,7 @@ static int hdf5_write_scalar_attr(const char* file_name, hid_t file_id,
  * "{lb[0],lb[1], ...}-{ub[0], ub[1], ...}".
  * The written obj_data remains in dspaces memory after this write.
  * */
-int hdf5_write_od(const char* file_path, struct obj_data *od)
+int hdf5_write_od(struct swap_config* swap_conf, struct obj_data *od)
 {
     /* We will write each version of a variable in a separate file 
        in order to avoid the slow down caused by waiting the HDF5
@@ -712,8 +712,26 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
     obj_descriptor search_odsc, union_odsc;
     struct obj_data *qod, *search_od, *union_od;
 
+    /* Check if we can open the file path, if not, create one at the default path */
+    if(!(check_dir_exist(swap_conf->file_dir) && check_dir_write_permission(swap_conf->file_dir)))
+    {
+        fprintf(stderr, "WARNING: Failed to write files into swap directory: %s "
+                        "Use ./dspaces_swap as the default swap directory instead.\n",
+                        swap_conf->file_dir);
+        free(swap_conf->file_dir);
+        swap_conf->file_dir = strdup("./dspaces_swap/");
+        mkdir_all_owner_permission(swap_conf->file_dir);
+    }
+    // DIR* dir = opendir(swap_conf->file_dir);
+    // if(dir && (access(swap_conf->file_dir, W_OK) == 0)) {
+    //     closedir(dir);
+    // } else {
+        
+    // }
+
+
     /* Concatenate file name */
-    sprintf(file_name, "%s/%s.ver%u.h5", file_path, od->obj_desc.name , od->obj_desc.version);
+    sprintf(file_name, "%s/%s.ver%u.h5", swap_conf->file_dir, od->obj_desc.name, od->obj_desc.version);
 
     /* Mute HDF5 error message for potential concurrent file createion & access. */
     // TODO: Unmute it later, but the HDF5 function has a bug in latest release.
@@ -731,12 +749,6 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
         ret = hdf5_write_scalar_attr(file_name, file_id, "ndims",
                                         H5T_NATIVE_INT, &(od->obj_desc.bb.num_dims));
         if(ret != dspaces_SUCCESS) return ret;
-
-        status = H5Fclose(file_id);
-        if(status < 0) {
-            fprintf(stderr,"HDF5 failed to close the created file: %s.\n", file_name);
-            return dspaces_ERR_HDF5;
-        }
     } else {
         /* Try to catch the file lock and open the file. */
         do {
@@ -763,7 +775,7 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
         if(search == -2) {
             /* qbbox includes some bbox in the file. qbbox remains the same one. */
             // write the memory to a new dataset
-            ret = hdf5_write_dataset(file_name, file_id, qbbox, qod->obj_desc.size, wdata);
+            ret = hdf5_write_dataset(file_name, file_id, qbbox, qod->obj_desc.type, wdata);
             if(ret != dspaces_SUCCESS) return ret;
 
             // delete the found dataset
@@ -795,7 +807,7 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
             // write the union obj_data to a new dataset
             wdata = union_od->data;
             ret = hdf5_write_dataset(file_name, file_id, &(union_odsc.bb), 
-                                        union_od->obj_desc.size, wdata);
+                                        union_od->obj_desc.type, wdata);
             if(ret != dspaces_SUCCESS) return ret;
 
             /* Free the old memory data buffer and file data buffer.
@@ -839,7 +851,7 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
 
     /* Write a new data obj if not mergeable. */
     if(!mergeable) {
-        ret = hdf5_write_dataset(file_name, file_id, &(od->obj_desc.bb), od->obj_desc.size, od->data);
+        ret = hdf5_write_dataset(file_name, file_id, &(od->obj_desc.bb), od->obj_desc.type, od->data);
         if(ret != dspaces_SUCCESS) return ret;
     }
 
@@ -860,7 +872,7 @@ int hdf5_write_od(const char* file_path, struct obj_data *od)
  *  Subset reading from a dataset is supported.
  *  The data read from the HDF5 file is stored in the od->data.
  * */
-int hdf5_read_od(const char* file_path, struct obj_data *od)
+int hdf5_read_od(struct swap_config* swap_conf, struct obj_data *od)
 {
     int ret;
     hid_t file_id;
@@ -870,7 +882,7 @@ int hdf5_read_od(const char* file_path, struct obj_data *od)
     struct bbox sbbox;
 
     /* Concatenate file name */
-    sprintf(file_name, "%s/%s.ver%u.h5", file_path, od->obj_desc.name , od->obj_desc.version);
+    sprintf(file_name, "%s/%s.ver%u.h5", swap_conf->file_dir, od->obj_desc.name, od->obj_desc.version);
 
     /* Mute HDF5 error message for potential concurrent file createion & access. */
     // TODO: Unmute it later, but the HDF5 function has a bug in latest release.

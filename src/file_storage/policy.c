@@ -14,18 +14,6 @@ const char* policy_options[] = {
     "LRU"
 };
 
-// struct obj_data_ptr_flat_list_entry* ls_flat_od_list_entry_alloc(struct obj_data* od)
-// {
-//     struct obj_data_ptr_flat_list_entry *od_flat_entry =
-//         (struct obj_data_ptr_flat_list_entry*) malloc(sizeof(struct obj_data_ptr_flat_list_entry));
-
-//     od_flat_entry->od = od;
-//     od->ls_od_entry = od_flat_entry;
-//     od_flat_entry->usecnt = 0;
-
-//     return od_flat_entry;
-// }
-
 void free_ls_od_list(struct list_head* ls_od_list)
 {
     if(!ls_od_list)

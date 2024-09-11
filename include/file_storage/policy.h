@@ -19,13 +19,6 @@ struct swap_config
     } mem_quota;
 };
 
-// struct obj_data_ptr_flat_list_entry {
-//     struct list_head entry;
-//     struct obj_data *od;
-//     int usecnt;
-// };
-
-// struct obj_data_ptr_flat_list_entry* ls_flat_od_list_entry_alloc(struct obj_data* od);
 void free_ls_od_list(struct list_head* ls_od_list);
 
 void memory_quota_parser(char* str, struct swap_config* swap);
