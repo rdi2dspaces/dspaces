@@ -153,6 +153,7 @@ struct dspaces_provider {
     int f_debug;
     int f_drain;
     int f_kill;
+    int f_filedebug;
 
 #ifdef HAVE_DRC
     uint32_t drc_credential_id;
@@ -482,6 +483,12 @@ static int parse_conf_toml(const char *fname, struct list_head *dir_list,
         } else {
             swap->disk_quota_MB = -1.0;
         }
+    } else {
+        swap->file_dir = strdup("./swap/");
+        swap->mem_quota_type = 1;
+        swap->mem_quota.percent = 1.0;
+        swap->policy = strdup("Default");
+        swap->disk_quota_MB = -1.0;
     }
 
     toml_free(conf);
@@ -1112,6 +1119,7 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     const char *envdebug = getenv("DSPACES_DEBUG");
     const char *envnthreads = getenv("DSPACES_NUM_HANDLERS");
     const char *envdrain = getenv("DSPACES_DRAIN");
+    const char *envfiledebug = getenv("DSPACES_FILE_DEBUG");
     dspaces_provider_t server;
     hg_class_t *hg;
     static int is_initialized = 0;
@@ -1146,6 +1154,10 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     if(envdrain) {
         DEBUG_OUT("enabling data draining.\n");
         server->f_drain = 1;
+    }
+
+    if(envfiledebug) {
+        server->f_filedebug = 1;
     }
 
     MPI_Comm_dup(comm, &server->comm);
@@ -1638,6 +1650,22 @@ static void put_rpc(hg_handle_t handle)
     struct obj_data_ptr_flat_list_entry *swap_od_entry;
     struct obj_data *swap_od;
 
+    if(server->f_filedebug) {
+        if(server->dsg->ls->num_obj>= 1) {
+            ABT_mutex_lock(server->ls_mutex);
+            swap_od = which_swap_out(&server->swap_conf, &server->dsg->ls_od_list);
+            ABT_mutex_unlock(server->ls_mutex);
+
+            hdf5_write_od(server->swap_conf.file_dir, swap_od);
+
+            ABT_mutex_lock(server->ls_mutex);
+            ls_remove(server->dsg->ls, swap_od);
+            list_del(&swap_od->flat_list_entry.entry);
+            ABT_mutex_unlock(server->ls_mutex);
+
+            obj_data_free(swap_od);
+        }
+    } else {
     while(need_swap_out(&server->swap_conf, size_MB)) {
         /* Find the od that we want to swap out */
         ABT_mutex_lock(server->ls_mutex);
@@ -1657,6 +1685,7 @@ static void put_rpc(hg_handle_t handle)
         /* Free od */
         obj_data_free(swap_od);
         // free(swap_od_entry);
+    }
     }
     
     struct obj_data *od;
