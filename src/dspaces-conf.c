@@ -313,10 +313,63 @@ static void parse_modules_table(toml_table_t *modules, struct ds_conf *conf)
 #endif
 }
 
+static void parse_swap_table(toml_table_t *swap, struct ds_conf *conf)
+{
+    toml_datum_t dat;
+
+    dat = toml_string_in(swap, "directory");
+    if(dat.ok) {
+        conf->swap.file_dir = strdup(dat.u.s);
+        free(dat.u.s);
+    } else{
+        conf->swap.file_dir = strdup("./swap/");
+    }
+
+    dat = toml_string_in(swap, "memory quota");
+    if(dat.ok) {
+        memory_quota_parser(dat.u.s, &conf->swap);
+        free(dat.u.s);
+    } else{
+        conf->swap.mem_quota_type = 1;
+        conf->swap.mem_quota.percent = 1.0;
+    }
+
+    dat = toml_string_in(swap, "policy");
+    if(dat.ok) {
+        if(policy_str_check(dat.u.s)) {
+            conf->swap.policy = strdup(dat.u.s);
+        } else {
+            conf->swap.policy = strdup("Default");
+            fprintf(stderr, "WARNING: Swap Policy: %s is not supported. "
+                            "Use FIFO policy as default.\n", dat.u.s);
+        }
+        free(dat.u.s);
+    } else {
+        conf->swap.policy = strdup("Default");
+    }
+
+    dat = toml_string_in(swap, "disk quota");
+    if(dat.ok) {
+        disk_quota_parser(dat.u.s, &conf->swap);
+        free(dat.u.s);
+    } else {
+        conf->swap.disk_quota_MB = -1.0;
+    }
+}
+
+static inline void set_default_swap(struct ds_conf *conf)
+{
+    conf->swap.file_dir = strdup("./swap/");
+    conf->swap.mem_quota_type = 1;
+    conf->swap.mem_quota.percent = 1.0;
+    conf->swap.policy = strdup("Default");
+    conf->swap.disk_quota_MB = -1.0;
+}
+
 int parse_conf_toml(const char *fname, struct ds_conf *conf)
 {
     FILE *fin;
-    toml_table_t *toml_conf, *server, *remotes, *storage, *modules;
+    toml_table_t *toml_conf, *server, *remotes, *storage, *modules, *swap;
     char errbuf[200];
     char *ip;
     int port;
@@ -364,6 +417,13 @@ int parse_conf_toml(const char *fname, struct ds_conf *conf)
     modules = toml_table_in(toml_conf, "modules");
     if(modules) {
         parse_modules_table(modules, conf);
+    }
+
+    swap = toml_table_in(toml_conf, "swap space");
+    if(swap) {
+        parse_swap_table(swap, conf);
+    } else {
+        set_default_swap(conf);
     }
 
     toml_free(toml_conf);
