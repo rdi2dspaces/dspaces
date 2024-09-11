@@ -57,13 +57,13 @@ static char *hdf5_bound_sprint(const uint64_t* bound, int num_dims)
 {
     char *str;
     int i;
-    int size = 2; // count the curly braces
+    int size = 2;
 
     for(i = 0; i < num_dims; i++) {
         size += snprintf(NULL, 0, "%" PRIu64, bound[i]);
         if(i > 0) {
+            size += i ? 2 : 0; // account for ", "
         }
-        size += i ? 2 : 0; // account for ", "
     }
     str = malloc(sizeof(*str) * (size + 1)); // add null terminator
     strcpy(str, "{");
@@ -72,17 +72,14 @@ static char *hdf5_bound_sprint(const uint64_t* bound, int num_dims)
         str = str_append(str, tmp);
     }
     str = str_append_const(str, "}");
-
     return str;
 }
 
 static char* hdf5_dataset_name_sprint(const struct bbox* bbox)
 {
-    char *str = strdup("{");
-    str = str_append(str, hdf5_bound_sprint(bbox->lb.c, bbox->num_dims));
-    str = str_append_const(str, "}-{");
+    char *str = hdf5_bound_sprint(bbox->lb.c, bbox->num_dims);
+    str = str_append_const(str, "-");
     str = str_append(str, hdf5_bound_sprint(bbox->ub.c, bbox->num_dims));
-    str = str_append_const(str, "}");
     return str;
 }
 
@@ -273,9 +270,9 @@ static char* hdf5_search_include_dataset(const char* file_name, hid_t file_id, s
     memset(sbbox.ub.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
 
     for(int i=0; i<ginfo.nlinks; i++) {
-        // First get the dataset name size
+        // First get the dataset name size, +1 is very important!
         dname_size = H5Lget_name_by_idx(file_id, ".", H5_INDEX_NAME,
-                                            H5_ITER_INC, i, NULL, 0, H5P_DEFAULT);
+                                            H5_ITER_INC, i, NULL, 0, H5P_DEFAULT) + 1;
         if(dname_size < 0) {
             fprintf(stderr,"HDF5 failed to get dataset name size in file: %s.\n", file_name);
             return NULL;
@@ -722,13 +719,6 @@ int hdf5_write_od(struct swap_config* swap_conf, struct obj_data *od)
         swap_conf->file_dir = strdup("./dspaces_swap/");
         mkdir_all_owner_permission(swap_conf->file_dir);
     }
-    // DIR* dir = opendir(swap_conf->file_dir);
-    // if(dir && (access(swap_conf->file_dir, W_OK) == 0)) {
-    //     closedir(dir);
-    // } else {
-        
-    // }
-
 
     /* Concatenate file name */
     sprintf(file_name, "%s/%s.ver%u.h5", swap_conf->file_dir, od->obj_desc.name, od->obj_desc.version);
@@ -906,6 +896,9 @@ int hdf5_read_od(struct swap_config* swap_conf, struct obj_data *od)
         return dspaces_ERR_HDF5;
     }
 
+    sbbox.num_dims = od->obj_desc.bb.num_dims;
+    memset(sbbox.lb.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
+    memset(sbbox.ub.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
     hdf5_dataset_name_parser(dataset_name, &sbbox);
 
     offset = (hsize_t*) malloc(od->obj_desc.bb.num_dims*sizeof(hsize_t));
