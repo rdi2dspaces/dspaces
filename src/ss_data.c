@@ -372,6 +372,45 @@ static int dht_construct_hash(struct dht *dht, struct sspace *ssd)
     return err;
 }
 
+static struct sspace *ssd_alloc_v0(const struct bbox *bb_domain,
+                                   int max_versions)
+{
+    struct sspace *ssd;
+    int err = -ENOMEM;
+
+    ssd = malloc(sizeof(*ssd));
+    if(!ssd)
+        goto err_out;
+    memset(ssd, 0, sizeof(*ssd));
+
+    ssd->dht = dht_alloc(ssd, bb_domain, 1, max_versions);
+    if(!ssd->dht) {
+        free(ssd);
+        goto err_out;
+    }
+
+    ssd->dht->ent_tab[0]->rank = 0;
+
+    ssd->hash_version = ssd_hash_version_v0;
+    return ssd;
+err_out:
+    fprintf(stderr, "'%s()': failed with %d\n", __func__, err);
+    return NULL;
+}
+
+static int ssd_hash_v0(struct sspace *ss, const struct bbox *bb,
+                       struct dht_entry *de_tab[])
+{
+    de_tab[0] = ss->dht->ent_tab[0];
+    return 1;
+}
+
+static void ssd_free_v0(struct sspace *ssd)
+{
+    dht_free(ssd->dht);
+    free(ssd);
+}
+
 static struct sspace *ssd_alloc_v1(const struct bbox *bb_domain, int num_nodes,
                                    int max_versions)
 {
@@ -752,9 +791,10 @@ char *obj_desc_sprint(obj_descriptor *odsc)
                         "\t.version = %d,\n"
                         "\t.size = %i,\n"
                         "\t.tag = %i,\n"
+                        "\t.type = %i,\n"
                         "\t.bb = ",
                         odsc->name, odsc->owner, odsc->version, odsc->size,
-                        odsc->tag);
+                        odsc->tag, odsc->type);
     str = str_append_const(str_append(str, bbox_sprint(&odsc->bb)), "}\n");
 
     return str;
@@ -766,6 +806,8 @@ int ssd_copy(struct obj_data *to_obj, struct obj_data *from_obj)
     struct bbox bbcom;
     int copied_elems = 0;
 
+    to_obj->obj_desc.tag = from_obj->obj_desc.tag;
+    to_obj->obj_desc.type = from_obj->obj_desc.type;
     bbox_intersect(&to_obj->obj_desc.bb, &from_obj->obj_desc.bb, &bbcom);
 
     matrix_init(&from_mat, from_obj->obj_desc.st, &from_obj->obj_desc.bb,
@@ -932,9 +974,6 @@ void ls_add_obj(ss_storage *ls, struct obj_data *od)
     struct list_head *bin;
     struct obj_data *od_existing;
 
-    // ABT_rwlock_create(&od->lock);
-    // ABT_rwlock_wrlock(&od->lock);
-
     // duplicate is noop
     ds_str_hash_add(ls->var_dict, od->obj_desc.name);
 
@@ -954,7 +993,6 @@ void ls_add_obj(ss_storage *ls, struct obj_data *od)
     /* NOTE: new object comes first in the list. */
     list_add(&od->obj_entry, bin);
     ls->num_obj++;
-    // ABT_rwlock_unlock(&od->lock);
 }
 
 struct obj_data *ls_lookup(ss_storage *ls, char *name)
@@ -1045,24 +1083,24 @@ int ls_find_all(ss_storage *ls, obj_descriptor *odsc, struct obj_data ***ods)
     struct bbox isect;
 
     num_elem = bbox_volume(&odsc->bb);
-    *ods =  malloc(sizeof(**ods) * ls->num_obj);
+    *ods = malloc(sizeof(**ods) * ls->num_obj);
     index = odsc->version % ls->size_hash;
     list = &ls->obj_hash[index];
 
     list_for_each_entry(od, list, struct obj_data, obj_entry)
     {
-         if(obj_desc_equals_intersect(odsc, &od->obj_desc)) {
+        if(obj_desc_equals_intersect(odsc, &od->obj_desc)) {
             (*ods)[n++] = od;
             bbox_intersect(&odsc->bb, &od->obj_desc.bb, &isect);
             num_elem -= bbox_volume(&isect);
-         }
+        }
     }
     if(num_elem != 0) {
         free(*ods);
-        return(-1);
+        return (-1);
     }
-    
-    return(n);
+
+    return (n);
 }
 
 /*
@@ -1318,6 +1356,11 @@ int ssd_choose_hash(const struct bbox *bb_domain)
     uint64_t x;
     int i;
 
+    if(bb_domain->num_dims == 1 && bb_domain->ub.c[0] == 0) {
+        // flag for no hashing
+        return (ssd_hash_version_v0);
+    }
+
     for(i = 0; i < bb_domain->num_dims; i++) {
         x = bb_domain->ub.c[i];
         if(x & x + 1) {
@@ -1357,6 +1400,9 @@ struct sspace *ssd_alloc(const struct bbox *bb_domain, int num_nodes,
     }
 
     switch(hash_version) {
+    case ssd_hash_version_v0:
+        ss = ssd_alloc_v0(bb_domain, max_versions);
+        break;
     case ssd_hash_version_v1:
         ss = ssd_alloc_v1(bb_domain, num_nodes, max_versions);
         break;
@@ -1381,6 +1427,9 @@ struct sspace *ssd_alloc(const struct bbox *bb_domain, int num_nodes,
 void ssd_free(struct sspace *ss)
 {
     switch(ss->hash_version) {
+    case ssd_hash_version_v0:
+        ssd_free_v0(ss);
+        break;
     case ssd_hash_version_v1:
         ssd_free_v1(ss);
         break;
@@ -1392,6 +1441,11 @@ void ssd_free(struct sspace *ss)
                 __func__, ss->hash_version);
         break;
     }
+}
+
+long ssh_hash_elem_count_v0(struct sspace *ss, const struct bbox *bb)
+{
+    return (bbox_volume(bb));
 }
 
 long ssh_hash_elem_count_v1(struct sspace *ss, const struct bbox *bb)
@@ -1453,6 +1507,9 @@ long ssh_hash_elem_count(struct sspace *ss, const struct bbox *bb)
     long ret;
 
     switch(ss->hash_version) {
+    case ssd_hash_version_v0:
+        ret = ssh_hash_elem_count_v0(ss, bb);
+        break;
     case ssd_hash_version_v1:
         ret = ssh_hash_elem_count_v1(ss, bb);
         break;
@@ -1487,6 +1544,9 @@ int ssd_hash(struct sspace *ss, const struct bbox *bb,
     int ret;
 
     switch(ss->hash_version) {
+    case ssd_hash_version_v0:
+        ret = ssd_hash_v0(ss, bb, de_tab);
+        break;
     case ssd_hash_version_v1:
         ret = ssd_hash_v1(ss, bb, de_tab);
         break;
@@ -1725,7 +1785,7 @@ int dht_find_entry_all(struct dht_entry *de, obj_descriptor *q_odsc,
     long num_elem;
     struct obj_desc_list *odscl;
     struct bbox isect;
-    int sub = timeout != 0 && de == de->ss->ent_self;
+    int sub = (timeout == -1 && de == de->ss->ent_self);
 
     n = q_odsc->version % de->odsc_size;
     num_elem = ssh_hash_elem_count(de->ss, &q_odsc->bb);

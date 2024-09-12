@@ -218,9 +218,11 @@ struct dspaces_client {
     hg_id_t notify_id;
     hg_id_t do_ops_id;
     hg_id_t pexec_id;
+    hg_id_t mpexec_id;
     hg_id_t cond_id;
     hg_id_t get_vars_id;
     hg_id_t get_var_objs_id;
+    hg_id_t reg_id;
     struct dc_gspace *dcg;
     char **server_address;
     char **node_names;
@@ -377,7 +379,9 @@ static int init_ss_info(dspaces_client_t client)
     int ret;
 
     ret = get_ss_info(client, &ss_data);
-    install_ss_info(client, &ss_data);
+    if(ret == dspaces_SUCCESS) {
+        install_ss_info(client, &ss_data);
+    }
 
     return (ret);
 }
@@ -396,6 +400,7 @@ static int init_ss_info_mpi(dspaces_client_t client, MPI_Comm comm)
         MPI_Bcast(&ss_data, sizeof(ss_data), MPI_BYTE, 0, comm);
         install_ss_info(client, &ss_data);
     }
+
     return (ret);
 }
 
@@ -818,11 +823,14 @@ static int dspaces_init_margo(dspaces_client_t client,
                               &flag);
         margo_registered_name(client->mid, "pexec_rpc", &client->pexec_id,
                               &flag);
+        margo_registered_name(client->mid, "mpexec_rpc", &client->pexec_id,
+                              &flag);
         margo_registered_name(client->mid, "cond_rpc", &client->cond_id, &flag);
         margo_registered_name(client->mid, "get_vars_rpc", &client->get_vars_id,
                               &flag);
         margo_registered_name(client->mid, "get_var_objs_rpc",
                               &client->get_var_objs_id, &flag);
+        margo_registered_name(client->mid, "reg_rpc", &client->reg_id, &flag);
     } else {
         client->put_id = MARGO_REGISTER(client->mid, "put_rpc", bulk_gdim_t,
                                         bulk_out_t, NULL);
@@ -874,6 +882,8 @@ static int dspaces_init_margo(dspaces_client_t client,
                                            do_ops_in_t, bulk_out_t, NULL);
         client->pexec_id = MARGO_REGISTER(client->mid, "pexec_rpc", pexec_in_t,
                                           pexec_out_t, NULL);
+        client->mpexec_id = MARGO_REGISTER(client->mid, "mpexec_rpc",
+                                           pexec_in_t, pexec_out_t, NULL);
         client->cond_id =
             MARGO_REGISTER(client->mid, "cond_rpc", cond_in_t, void, NULL);
         margo_registered_disable_response(client->mid, client->cond_id,
@@ -882,6 +892,8 @@ static int dspaces_init_margo(dspaces_client_t client,
                                              int32_t, name_list_t, NULL);
         client->get_var_objs_id = MARGO_REGISTER(
             client->mid, "get_var_objs_rpc", get_var_objs_in_t, odsc_hdr, NULL);
+        client->reg_id =
+            MARGO_REGISTER(client->mid, "reg_rpc", reg_in_t, uint64_t, NULL);
     }
 
     return (dspaces_SUCCESS);
@@ -943,7 +955,10 @@ int dspaces_init(int rank, dspaces_client_t *c)
     }
 
     choose_server(client);
-    init_ss_info(client);
+    ret = init_ss_info(client);
+    if(ret != dspaces_SUCCESS) {
+        return (ret);
+    }
     dspaces_post_init(client);
 
     *c = client;
@@ -984,7 +999,10 @@ int dspaces_init_mpi(MPI_Comm comm, dspaces_client_t *c)
     }
 
     choose_server(client);
-    init_ss_info_mpi(client, comm);
+    ret = init_ss_info_mpi(client, comm);
+    if(ret != dspaces_SUCCESS) {
+        return (ret);
+    }
     dspaces_post_init(client);
 
     *c = client;
@@ -1032,7 +1050,10 @@ int dspaces_init_wan(const char *listen_addr_str, const char *conn_str,
     }
 
     choose_server(client);
-    init_ss_info(client);
+    ret =init_ss_info(client);
+    if(ret != dspaces_SUCCESS) {
+        return (ret);
+    }
     dspaces_post_init(client);
 
     *c = client;
@@ -1072,7 +1093,10 @@ int dspaces_init_wan_mpi(const char *listen_addr_str, const char *conn_str,
     }
 
     choose_server(client);
-    init_ss_info_mpi(client, comm);
+    ret = init_ss_info_mpi(client, comm);
+    if(ret != dspaces_SUCCESS) {
+        return (ret);
+    }
     dspaces_post_init(client);
 
     *c = client;
@@ -1199,7 +1223,7 @@ static void copy_var_name_to_odsc(dspaces_client_t client, const char *var_name,
                                   obj_descriptor *odsc)
 {
     if(client->nspace) {
-        strncpy(odsc->name, client->nspace, strlen(client->nspace));
+        strncpy(odsc->name, client->nspace, sizeof(odsc->name) - 1);
         odsc->name[strlen(client->nspace)] = '\\';
         strncpy(&odsc->name[strlen(client->nspace) + 1], var_name,
                 (sizeof(odsc->name) - strlen(client->nspace)) - 1);
@@ -1274,13 +1298,20 @@ static int dspaces_cpu_put_tag(dspaces_client_t client, const char *var_name,
     hg_return_t hret;
     bulk_gdim_t in;
     bulk_out_t out;
+    int type;
     int ret = dspaces_SUCCESS;
+
+    if(elem_size < 0) {
+        type = elem_size;
+        elem_size = type_to_size(type);
+    }
 
     obj_descriptor odsc = {.version = ver,
                            .owner = {0},
                            .st = st,
                            .flags = 0,
                            .tag = tag,
+                           .type = type,
                            .size = elem_size,
                            .bb = {
                                .num_dims = ndim,
@@ -1884,11 +1915,11 @@ static int get_data(dspaces_client_t client, int num_odscs,
 
         rdma_size[i] = (req_obj.size) * bbox_volume(&odsc_tab[i].bb);
 
-        DEBUG_OUT("For odsc %i, element size is %zi, and there are %li "
-                  "elements to fetch.\n",
+        DEBUG_OUT("For odsc %i, element size is %zi, and there are %" PRIu64
+                  " elements to fetch.\n",
                   i, req_obj.size, bbox_volume(&odsc_tab[i].bb));
 
-        DEBUG_OUT("creating bulk handle for buffer %p of size %li.\n",
+        DEBUG_OUT("creating bulk handle for buffer %p of size %" PRIu64 ".\n",
                   od[i]->data, rdma_size[i]);
         hret =
             margo_bulk_create(client->mid, 1, (void **)(&(od[i]->data)),
@@ -1934,7 +1965,8 @@ static int get_data(dspaces_client_t client, int num_odscs,
             // decompress into buffer and copy back
             ret = LZ4_decompress_safe(od[i]->data, ucbuffer, resp.len,
                                       rdma_size[i]);
-            DEBUG_OUT("decompressed from %li to %i bytes\n", resp.len, ret);
+            DEBUG_OUT("decompressed from %" PRIu64 " to %i bytes\n", resp.len,
+                      ret);
             if(ret != rdma_size[i]) {
                 fprintf(stderr, "LZ4 decompression failed with %i.\n", ret);
             }
@@ -2582,7 +2614,7 @@ int dspaces_put_local(dspaces_client_t client, const char *var_name,
                            }};
 
     hg_addr_t owner_addr;
-    size_t owner_addr_size = 128;
+    hg_size_t owner_addr_size = 128;
 
     margo_addr_self(client->mid, &owner_addr);
     margo_addr_to_string(client->mid, odsc.owner, &owner_addr_size, owner_addr);
@@ -2663,8 +2695,8 @@ static int get_odscs(dspaces_client_t client, obj_descriptor *odsc, int timeout,
     in.odsc_gdim.size = sizeof(*odsc);
     in.odsc_gdim.raw_odsc = (char *)odsc;
     in.param = timeout;
-  
-    DEBUG_OUT("starting query.\n"); 
+
+    DEBUG_OUT("starting query.\n");
     set_global_dimension(&(client->dcg->gdim_list), odsc->name,
                          &(client->dcg->default_gdim), &od_gdim);
     in.odsc_gdim.gdim_size = sizeof(od_gdim);
@@ -2672,7 +2704,7 @@ static int get_odscs(dspaces_client_t client, obj_descriptor *odsc, int timeout,
     DEBUG_OUT("Found gdims.\n");
 
     get_server_address(client, &server_addr);
-     
+
     hret = margo_create(client->mid, server_addr, client->query_id, &handle);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: %s: margo_create() failed with %d.\n", __func__,
@@ -2725,6 +2757,103 @@ static void fill_odsc(dspaces_client_t client, const char *var_name,
     copy_var_name_to_odsc(client, var_name, odsc);
 }
 
+static void odsc_from_req(dspaces_client_t client, struct dspaces_req *req,
+                          obj_descriptor *odsc)
+{
+    fill_odsc(client, req->var_name, req->ver, req->elem_size, req->ndim,
+              req->lb, req->ub, odsc);
+}
+
+static void fill_req(dspaces_client_t client, obj_descriptor *odsc, void *data,
+                     struct dspaces_req *req)
+{
+    int i;
+
+    if(client->nspace) {
+        req->var_name = strdup(&odsc->name[strlen(client->nspace) + 2]);
+    } else {
+        req->var_name = strdup(odsc->name);
+    }
+    req->ver = odsc->version;
+    req->elem_size = odsc->size;
+    req->ndim = odsc->bb.num_dims;
+    req->lb = malloc(sizeof(*req->lb) * req->ndim);
+    req->ub = malloc(sizeof(*req->ub) * req->ndim);
+    for(i = 0; i < req->ndim; i++) {
+        req->lb[i] = odsc->bb.lb.c[i];
+        req->ub[i] = odsc->bb.ub.c[i];
+    }
+    req->buf = data;
+    req->tag = odsc->tag;
+}
+
+int dspaces_get_req(dspaces_client_t client, struct dspaces_req *in_req,
+                    struct dspaces_req *out_req, int timeout)
+{
+    obj_descriptor odsc = {0};
+    obj_descriptor *odsc_tab;
+    int num_odscs;
+    int elem_size;
+    int num_elem = 1;
+    int i, j;
+    int ret = dspaces_SUCCESS;
+    void *data;
+
+    odsc_from_req(client, in_req, &odsc);
+
+    DEBUG_OUT("Querying %s with timeout %d\n", obj_desc_sprint(&odsc), timeout);
+
+    num_odscs = get_odscs(client, &odsc, timeout, &odsc_tab);
+
+    DEBUG_OUT("Finished query - need to fetch %d objects\n", num_odscs);
+    for(int i = 0; i < num_odscs; i++) {
+        if(odsc_tab[i].flags & DS_OBJ_RESIZE) {
+            DEBUG_OUT("the result is cropped.\n");
+            memcpy(&odsc.bb, &odsc_tab[i].bb, sizeof(odsc_tab[i].bb));
+        }
+        DEBUG_OUT("%s\n", obj_desc_sprint(&odsc_tab[i]));
+    }
+
+    // send request to get the obj_desc
+    if(num_odscs != 0) {
+        elem_size = odsc_tab[0].size;
+    } else {
+        DEBUG_OUT("not setting element size because there are no result "
+                  "descriptors.\n");
+        data = NULL;
+        return (ret);
+    }
+
+    odsc.size = elem_size;
+    DEBUG_OUT("element size is %zi\n", odsc.size);
+    for(i = 0; i < odsc.bb.num_dims; i++) {
+        num_elem *= (odsc.bb.ub.c[i] - odsc.bb.lb.c[i]) + 1;
+    }
+    DEBUG_OUT("data buffer size is %d\n", num_elem * elem_size);
+
+    odsc.tag = odsc_tab[0].tag;
+    for(i = 1; i < num_odscs; i++) {
+        if(odsc_tab[i].tag != odsc_tab[0].tag) {
+            fprintf(stderr, "WARNING: multiple distinct tag values returned in "
+                            "query result. Returning first one.\n");
+            break;
+        }
+    }
+
+    if(in_req->buf == NULL) {
+        data = malloc(num_elem * elem_size);
+    } else {
+        data = in_req->buf;
+    }
+
+    get_data(client, num_odscs, odsc, odsc_tab, data);
+    if(out_req) {
+        fill_req(client, &odsc, data, out_req);
+    }
+
+    return ret;
+}
+
 int dspaces_aget(dspaces_client_t client, const char *var_name,
                  unsigned int ver, int ndim, uint64_t *lb, uint64_t *ub,
                  void **data, int *tag, int timeout)
@@ -2745,10 +2874,11 @@ int dspaces_aget(dspaces_client_t client, const char *var_name,
 
     DEBUG_OUT("Finished query - need to fetch %d objects\n", num_odscs);
     for(int i = 0; i < num_odscs; i++) {
-        if(odsc_tab[i].flags && DS_OBJ_RESIZE) {
+        if(odsc_tab[i].flags & DS_OBJ_RESIZE) {
             DEBUG_OUT("the result is cropped.\n");
             memcpy(&odsc.bb, &odsc_tab[i].bb, sizeof(odsc_tab[i].bb));
             for(j = 0; j < odsc.bb.num_dims; j++) {
+                lb[j] = odsc.bb.lb.c[j];
                 ub[j] = odsc.bb.ub.c[j];
             }
         }
@@ -2959,7 +3089,7 @@ int dspaces_get_meta(dspaces_client_t client, const char *name, int mode,
     DEBUG_OUT("Replied with version %d.\n", out.version);
 
     if(out.mdata.len) {
-        DEBUG_OUT("fetching %zi bytes.\n", out.mdata.len);
+        DEBUG_OUT("fetching %" PRIu64 " bytes.\n", out.mdata.len);
         *data = malloc(out.mdata.len);
         /*
         hret = margo_bulk_create(client->mid, 1, data, &out.size,
@@ -3006,6 +3136,128 @@ err_hg_handle:
 err_hg:
     free(in.name);
     return dspaces_ERR_MERCURY;
+}
+
+int dspaces_mpexec(dspaces_client_t client, int num_args,
+                   struct dspaces_req *args, const char *fn, unsigned int fnsz,
+                   const char *fn_name, void **data, int *size)
+{
+    obj_descriptor *arg_odscs;
+    hg_addr_t server_addr;
+    hg_return_t hret;
+    hg_handle_t handle, cond_handle;
+    pexec_in_t in;
+    pexec_out_t out;
+    cond_in_t in2;
+    uint64_t mtxp, condp;
+    hg_bulk_t bulk_handle;
+    hg_size_t rdma_size;
+    margo_request req;
+    int i;
+
+    in.odsc.size = num_args * sizeof(*arg_odscs);
+    in.odsc.raw_odsc = calloc(1, in.odsc.size);
+    arg_odscs = (obj_descriptor *)in.odsc.raw_odsc;
+    for(i = 0; i < num_args; i++) {
+        odsc_from_req(client, &args[i], &arg_odscs[i]);
+        DEBUG_OUT("Remote args %i is %s\n", i, obj_desc_sprint(&arg_odscs[i]));
+    }
+
+    in.fn_name = strdup(fn_name);
+
+    rdma_size = fnsz;
+    in.length = fnsz;
+    if(rdma_size > 0) {
+        DEBUG_OUT("sending fn\n");
+        hret = margo_bulk_create(client->mid, 1, (void **)&fn, &rdma_size,
+                                 HG_BULK_READ_ONLY, &in.handle);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): margo_bulk_create() failed\n",
+                    __func__);
+            return dspaces_ERR_MERCURY;
+        }
+        DEBUG_OUT("created fn tranfer buffer\n");
+    }
+
+    get_server_address(client, &server_addr);
+
+    hret = margo_create(client->mid, server_addr, client->mpexec_id, &handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    hret = margo_forward(handle, &in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_forward() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        margo_destroy(handle);
+        return dspaces_ERR_MERCURY;
+    }
+
+    hret = margo_get_output(handle, &out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
+        margo_bulk_free(in.handle);
+        margo_destroy(handle);
+        return dspaces_ERR_MERCURY;
+    }
+    margo_bulk_free(in.handle);
+
+    DEBUG_OUT("received result with size %" PRIu32 "\n", out.length);
+    rdma_size = out.length;
+    if(rdma_size > 0) {
+        *data = malloc(out.length);
+        hret = margo_bulk_create(client->mid, 1, (void **)data, &rdma_size,
+                                 HG_BULK_WRITE_ONLY, &bulk_handle);
+        if(hret != HG_SUCCESS) {
+            // TODO notify server of failure (server is waiting)
+            margo_free_output(handle, &out);
+            margo_destroy(handle);
+            return dspaces_ERR_MERCURY;
+        }
+        hret = margo_bulk_transfer(client->mid, HG_BULK_PULL, server_addr,
+                                   out.handle, 0, bulk_handle, 0, rdma_size);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): margo_bulk_transfer failed!\n",
+                    __func__);
+            margo_free_output(handle, &out);
+            margo_destroy(handle);
+            return dspaces_ERR_MERCURY;
+        }
+        margo_bulk_free(bulk_handle);
+        in2.mtxp = out.mtxp;
+        in2.condp = out.condp;
+        hret = margo_create(client->mid, server_addr, client->cond_id,
+                            &cond_handle);
+
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
+            return dspaces_ERR_MERCURY;
+        }
+
+        DEBUG_OUT("sending cond_rpc with condp = %" PRIu64 ", mtxp = %" PRIu64
+                  "\n",
+                  in2.condp, in2.mtxp);
+        hret = margo_iforward(cond_handle, &in2, &req);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): margo_iforward() failed\n", __func__);
+            margo_destroy(cond_handle);
+            return dspaces_ERR_MERCURY;
+        }
+        DEBUG_OUT("sent\n");
+        *size = rdma_size;
+        margo_destroy(cond_handle);
+    } else {
+        *size = 0;
+        *data = NULL;
+    }
+    margo_free_output(handle, &out);
+    margo_destroy(handle);
+    free(in.odsc.raw_odsc);
+    DEBUG_OUT("done with handling pexec\n");
+    return (dspaces_SUCCESS);
 }
 
 int dspaces_pexec(dspaces_client_t client, const char *var_name,
@@ -3129,6 +3381,59 @@ int dspaces_pexec(dspaces_client_t client, const char *var_name,
     return (dspaces_SUCCESS);
 }
 
+long dspaces_register_simple(dspaces_client_t client, const char *type,
+                             const char *name, const char *reg_data,
+                             char **nspace)
+{
+    hg_addr_t server_addr;
+    hg_return_t hret;
+    reg_in_t in;
+    uint64_t out;
+    hg_handle_t handle;
+    long reg_handle;
+
+    in.type = strdup(type);
+    in.name = strdup(name);
+    in.reg_data = strdup(reg_data);
+    in.src = -1;
+
+    get_server_address(client, &server_addr);
+
+    hret = margo_create(client->mid, server_addr, client->reg_id, &handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_create() failed\n", __func__);
+        return (DS_MOD_ECLIENT);
+    }
+
+    hret = margo_forward(handle, &in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_forward() failed\n", __func__);
+        margo_destroy(handle);
+        return (DS_MOD_ECLIENT);
+    }
+
+    hret = margo_get_output(handle, &out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n", __func__);
+        margo_destroy(handle);
+        return (DS_MOD_ECLIENT);
+    }
+
+    reg_handle = out;
+    if(nspace) {
+        if(reg_handle < 0) {
+            *nspace = NULL;
+        } else {
+            *nspace = strdup("ds_reg");
+        }
+    }
+
+    margo_free_output(handle, &out);
+    margo_destroy(handle);
+
+    return (reg_handle);
+}
+
 static void get_local_rpc(hg_handle_t handle)
 {
     hg_return_t hret;
@@ -3192,7 +3497,7 @@ static void get_local_rpc(hg_handle_t handle)
     hg_size_t size = (in_odsc.size) * bbox_volume(&(in_odsc.bb));
     void *buffer = (void *)od->data;
 
-    DEBUG_OUT("creating buffer of size %zi\n", size);
+    DEBUG_OUT("creating buffer of size %" PRIu64 "\n", size);
     APEX_NAME_TIMER_START(4, "get_local_bulk_create");
     hret = margo_bulk_create(mid, 1, (void **)&buffer, &size, HG_BULK_READ_ONLY,
                              &bulk_handle);
@@ -3221,7 +3526,7 @@ static void get_local_rpc(hg_handle_t handle)
         int req_id = 0;
         size_t offset = 0;
         while(remaining) {
-            DEBUG_OUT("%li bytes left to transfer\n", remaining);
+            DEBUG_OUT("%" PRIu64 " bytes left to transfer\n", remaining);
             offset = size - remaining;
             xfer_size =
                 (remaining > BULK_TRANSFER_MAX) ? BULK_TRANSFER_MAX : remaining;
@@ -3547,7 +3852,7 @@ struct dspaces_sub_handle *dspaces_sub(dspaces_client_t client,
     struct dspaces_sub_handle *subh;
     odsc_gdim_t in;
     struct global_dimension od_gdim;
-    size_t owner_addr_size = 128;
+    hg_size_t owner_addr_size = 128;
     int ret;
 
     if(client->listener_init == 0) {
@@ -3588,7 +3893,7 @@ struct dspaces_sub_handle *dspaces_sub(dspaces_client_t client,
     memset(subh->q_odsc.bb.ub.c, 0, sizeof(uint64_t) * BBOX_MAX_NDIM);
     memcpy(subh->q_odsc.bb.lb.c, lb, sizeof(uint64_t) * ndim);
     memcpy(subh->q_odsc.bb.ub.c, ub, sizeof(uint64_t) * ndim);
-    strncpy(subh->q_odsc.name, var_name, strlen(var_name) + 1);
+    strncpy(subh->q_odsc.name, var_name, sizeof(subh->q_odsc.name) - 1);
     copy_var_name_to_odsc(client, var_name, &subh->q_odsc);
 
     // A hack to send our address to the server without using more space. This
@@ -3736,6 +4041,8 @@ int dspaces_op_calc(dspaces_client_t client, struct ds_data_expr *expr,
     hg_return_t hret;
     int ret;
 
+    DEBUG_OUT("Sending expression type %i\n", expr->type);
+
     in.expr = expr;
     cbuf = malloc(expr->size);
 
@@ -3767,8 +4074,9 @@ int dspaces_op_calc(dspaces_client_t client, struct ds_data_expr *expr,
     if(out.len) {
         *buf = malloc(rdma_size);
         ret = LZ4_decompress_safe(cbuf, *buf, out.len, rdma_size);
-        DEBUG_OUT("decompressed results from %zi to %zi bytes.\n", out.len,
-                  rdma_size);
+        DEBUG_OUT("decompressed results from %" PRIu64 " to %" PRIu64
+                  " bytes.\n",
+                  out.len, rdma_size);
         free(cbuf);
     } else {
         *buf = cbuf;
@@ -3776,6 +4084,8 @@ int dspaces_op_calc(dspaces_client_t client, struct ds_data_expr *expr,
 
     margo_free_output(handle, &out);
     margo_destroy(handle);
+
+    return (dspaces_SUCCESS);
 }
 
 void dspaces_set_namespace(dspaces_client_t client, const char *nspace)
@@ -3820,7 +4130,7 @@ int dspaces_get_var_names(dspaces_client_t client, char ***var_names)
         return (-1);
     }
 
-    DEBUG_OUT("Received %zi variables in reply\n", out.count);
+    DEBUG_OUT("Received %" PRIu64 " variables in reply\n", out.count);
 
     *var_names = malloc(sizeof(*var_names) * out.count);
     for(i = 0; i < out.count; i++) {

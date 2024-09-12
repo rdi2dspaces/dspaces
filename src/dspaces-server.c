@@ -5,7 +5,11 @@
  * See COPYRIGHT in top-level directory.
  */
 #include "dspaces-server.h"
+#include "dspaces-conf.h"
+#include "dspaces-logging.h"
+#include "dspaces-modules.h"
 #include "dspaces-ops.h"
+#include "dspaces-remote.h"
 #include "dspaces-storage.h"
 #include "dspaces.h"
 #include "dspacesp.h"
@@ -17,6 +21,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <lz4.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,18 +44,6 @@
 #include <rdmacred.h>
 #endif /* HAVE_DRC */
 
-#define DEBUG_OUT(dstr, ...)                                                   \
-    do {                                                                       \
-        if(server->f_debug) {                                                  \
-            ABT_unit_id tid;                                                   \
-            ABT_thread_self_id(&tid);                                          \
-            fprintf(stderr,                                                    \
-                    "Rank %i: TID: %" PRIu64 " %s, line %i (%s): " dstr,       \
-                    server->rank, tid, __FILE__, __LINE__, __func__,           \
-                    ##__VA_ARGS__);                                            \
-        }                                                                      \
-    } while(0);
-
 #define DSPACES_DEFAULT_NUM_HANDLERS 4
 
 #define xstr(s) str(s)
@@ -68,52 +61,8 @@ struct addr_list_entry {
     char *addr;
 };
 
-struct remote {
-    char *name;
-    char addr_str[128];
-    dspaces_client_t conn;
-};
-
-#define DSPACES_ARG_REAL 0
-#define DSPACES_ARG_INT 1
-#define DSPACES_ARG_STR 2
-#define DSPACES_ARG_NONE 3
-struct dspaces_module_args {
-    char *name;
-    int type;
-    int len;
-    union {
-        double rval;
-        long ival;
-        double *rarray;
-        long *iarray;
-        char *strval;
-    };
-};
-
-#define DSPACES_MOD_RET_ARRAY 0
-struct dspaces_module_ret {
-    int type;
-    int len;
-    uint64_t *dim;
-    int ndim;
-    int tag;
-    int elem_size;
-    void *data;
-};
-
-#define DSPACES_MOD_PY 0
-struct dspaces_module {
-    char *name;
-    int type;
-    union {
-#ifdef DSPACES_HAVE_PYTHON
-        PyObject *pModule;
-#endif // DSPACES_HAVE_PYTHON
-    };
-};
-
 struct dspaces_provider {
+    struct ds_conf conf;
     struct list_head dirs;
     margo_instance_id mid;
     hg_id_t put_id;
@@ -134,11 +83,12 @@ struct dspaces_provider {
     hg_id_t notify_id;
     hg_id_t do_ops_id;
     hg_id_t pexec_id;
+    hg_id_t mpexec_id;
     hg_id_t cond_id;
     hg_id_t get_vars_id;
     hg_id_t get_var_objs_id;
-    int nmods;
-    struct dspaces_module *mods;
+    hg_id_t reg_id;
+    struct list_head mods;
     struct ds_gspace *dsg;
     char **server_address;
     char **node_names;
@@ -170,7 +120,18 @@ struct dspaces_provider {
 
     struct remote *remotes;
     int nremote;
+
+    int num_handlers;
+    int *handler_rmap;
+
+    atomic_int local_reg_id;
+#ifdef DSPACES_HAVE_PYTHON
+    PyThreadState *main_state;
+    PyThreadState **handler_state;
+#endif // DSPACES_HAVE_PYTHON
 };
+
+static int dspaces_init_registry(dspaces_provider_t server);
 
 DECLARE_MARGO_RPC_HANDLER(put_rpc)
 DECLARE_MARGO_RPC_HANDLER(put_local_rpc)
@@ -187,296 +148,36 @@ DECLARE_MARGO_RPC_HANDLER(sub_rpc)
 DECLARE_MARGO_RPC_HANDLER(do_ops_rpc)
 #ifdef DSPACES_HAVE_PYTHON
 DECLARE_MARGO_RPC_HANDLER(pexec_rpc)
+DECLARE_MARGO_RPC_HANDLER(mpexec_rpc)
 #endif // DSPACES_HAVE_PYTHON
 DECLARE_MARGO_RPC_HANDLER(cond_rpc)
 DECLARE_MARGO_RPC_HANDLER(get_vars_rpc);
 DECLARE_MARGO_RPC_HANDLER(get_var_objs_rpc);
-
-static void put_rpc(hg_handle_t h);
-static void put_local_rpc(hg_handle_t h);
-static void put_meta_rpc(hg_handle_t h);
-static void get_rpc(hg_handle_t h);
-static void query_rpc(hg_handle_t h);
-static void query_meta_rpc(hg_handle_t h);
-static void obj_update_rpc(hg_handle_t h);
-static void odsc_internal_rpc(hg_handle_t h);
-static void ss_rpc(hg_handle_t h);
-static void kill_rpc(hg_handle_t h);
-static void sub_rpc(hg_handle_t h);
-static void do_ops_rpc(hg_handle_t h);
-static void pexec_rpc(hg_handle_t h);
-static void cond_rpc(hg_handle_t h);
-static void get_vars_rpc(hg_handle_t h);
-static void get_vars_obj_rpc(hg_handle_t h);
-
-/* Server configuration parameters */
-static struct {
-    int ndim;
-    struct coord dims;
-    int max_versions;
-    int hash_version; /* 1 - ssd_hash_version_v1, 2 - ssd_hash_version_v2 */
-    int num_apps;
-} ds_conf;
-
-static struct {
-    const char *opt;
-    int *pval;
-} options[] = {{"ndim", &ds_conf.ndim},
-               {"dims", (int *)&ds_conf.dims},
-               {"max_versions", &ds_conf.max_versions},
-               {"hash_version", &ds_conf.hash_version},
-               {"num_apps", &ds_conf.num_apps}};
-
-static void eat_spaces(char *line)
-{
-    char *t = line;
-
-    while(t && *t) {
-        if(*t != ' ' && *t != '\t' && *t != '\n')
-            *line++ = *t;
-        t++;
-    }
-    if(line)
-        *line = '\0';
-}
-
-static int parse_line(int lineno, char *line)
-{
-    char *t;
-    int i, n;
-
-    /* Comment line ? */
-    if(line[0] == '#')
-        return 0;
-
-    t = strstr(line, "=");
-    if(!t) {
-        eat_spaces(line);
-        if(strlen(line) == 0)
-            return 0;
-        else
-            return -EINVAL;
-    }
-
-    t[0] = '\0';
-    eat_spaces(line);
-    t++;
-
-    n = sizeof(options) / sizeof(options[0]);
-
-    for(i = 0; i < n; i++) {
-        if(strcmp(line, options[1].opt) == 0) { /**< when "dims" */
-            // get coordinates
-            int idx = 0;
-            char *crd;
-            crd = strtok(t, ",");
-            while(crd != NULL) {
-                ((struct coord *)options[1].pval)->c[idx] = atoll(crd);
-                crd = strtok(NULL, ",");
-                idx++;
-            }
-            if(idx != *(int *)options[0].pval) {
-                fprintf(stderr, "ERROR: (%s): dimensionality mismatch.\n",
-                        __func__);
-                fprintf(stderr, "ERROR: index=%d, ndims=%d\n", idx,
-                        *(int *)options[0].pval);
-                return -EINVAL;
-            }
-            break;
-        }
-        if(strcmp(line, options[i].opt) == 0) {
-            eat_spaces(line);
-            *(int *)options[i].pval = atoi(t);
-            break;
-        }
-    }
-
-    if(i == n) {
-        fprintf(stderr, "WARNING: (%s): unknown option '%s' at line %d.\n",
-                __func__, line, lineno);
-    }
-    return 0;
-}
-
-static int parse_conf(const char *fname)
-{
-    FILE *fin;
-    char buff[1024];
-    int lineno = 1, err;
-
-    fin = fopen(fname, "rt");
-    if(!fin) {
-        fprintf(stderr, "ERROR: could not open configuration file '%s'.\n",
-                fname);
-        return -errno;
-    }
-
-    while(fgets(buff, sizeof(buff), fin) != NULL) {
-        err = parse_line(lineno++, buff);
-        if(err < 0) {
-            fclose(fin);
-            return err;
-        }
-    }
-
-    fclose(fin);
-    return 0;
-}
-
-static int parse_conf_toml(const char *fname, struct list_head *dir_list,
-                           struct remote **rem_array, int *nremote)
-{
-    FILE *fin;
-    toml_table_t *conf;
-    toml_table_t *storage;
-    toml_table_t *conf_dir;
-    toml_table_t *server;
-    toml_table_t *remotes;
-    toml_table_t *remote;
-    toml_datum_t dat;
-    toml_array_t *arr;
-    struct dspaces_dir *dir;
-    struct dspaces_file *file;
-    char errbuf[200];
-    char *ip;
-    int port;
-    int ndim = 0;
-    int ndir, nfile;
-    int i, j, n;
-
-    fin = fopen(fname, "r");
-    if(!fin) {
-        fprintf(stderr, "ERROR: could not open configuration file '%s'.\n",
-                fname);
-        return -errno;
-    }
-
-    conf = toml_parse_file(fin, errbuf, sizeof(errbuf));
-    fclose(fin);
-
-    if(!conf) {
-        fprintf(stderr, "could not parse %s, %s.\n", fname, errbuf);
-        return -1;
-    }
-
-    server = toml_table_in(conf, "server");
-    if(!server) {
-        fprintf(stderr, "missing [server] block from %s\n", fname);
-        return -1;
-    }
-
-    n = sizeof(options) / sizeof(options[0]);
-    for(i = 0; i < n; i++) {
-        if(strcmp(options[i].opt, "dims") == 0) {
-            arr = toml_array_in(server, "dims");
-            if(arr) {
-                while(1) {
-                    dat = toml_int_at(arr, ndim);
-                    if(!dat.ok) {
-                        break;
-                    }
-                    ((struct coord *)options[i].pval)->c[ndim] = dat.u.i;
-                    ndim++;
-                }
-            }
-            for(j = 0; j < n; j++) {
-                if(strcmp(options[j].opt, "ndim") == 0) {
-                    *(int *)options[j].pval = ndim;
-                }
-            }
-        } else {
-            dat = toml_int_in(server, options[i].opt);
-            if(dat.ok) {
-                *(int *)options[i].pval = dat.u.i;
-            }
-        }
-    }
-
-    remotes = toml_table_in(conf, "remotes");
-    if(remotes) {
-        *nremote = toml_table_ntab(remotes);
-        *rem_array = malloc(sizeof(**rem_array) * *nremote);
-        for(i = 0; i < *nremote; i++) {
-            // remote = toml_table_at(remotes, i);
-            (*rem_array)[i].name = strdup(toml_key_in(remotes, i));
-            remote = toml_table_in(remotes, (*rem_array)[i].name);
-            dat = toml_string_in(remote, "ip");
-            ip = dat.u.s;
-            dat = toml_int_in(remote, "port");
-            port = dat.u.i;
-            sprintf((*rem_array)[i].addr_str, "sockets://%s:%i", ip, port);
-            free(ip);
-        }
-    }
-
-    storage = toml_table_in(conf, "storage");
-    if(storage) {
-        ndir = toml_table_ntab(storage);
-        for(i = 0; i < ndir; i++) {
-            dir = malloc(sizeof(*dir));
-            dir->name = strdup(toml_key_in(storage, i));
-            conf_dir = toml_table_in(storage, dir->name);
-            dat = toml_string_in(conf_dir, "directory");
-            dir->path = strdup(dat.u.s);
-            free(dat.u.s);
-            if(0 != (arr = toml_array_in(conf_dir, "files"))) {
-                INIT_LIST_HEAD(&dir->files);
-                nfile = toml_array_nelem(arr);
-                for(j = 0; j < nfile; j++) {
-                    dat = toml_string_at(arr, j);
-                    file = malloc(sizeof(*file));
-                    file->type = DS_FILE_NC;
-                    file->name = strdup(dat.u.s);
-                    free(dat.u.s);
-                    list_add(&file->entry, &dir->files);
-                }
-            } else {
-                dat = toml_string_in(conf_dir, "files");
-                if(dat.ok) {
-                    if(strcmp(dat.u.s, "all") == 0) {
-                        dir->cont_type = DS_FILE_ALL;
-                    } else {
-                        fprintf(stderr,
-                                "ERROR: %s: invalid value for "
-                                "storage.%s.files: %s\n",
-                                __func__, dir->name, dat.u.s);
-                    }
-                    free(dat.u.s);
-                } else {
-                    fprintf(stderr,
-                            "ERROR: %s: no readable 'files' key for '%s'.\n",
-                            __func__, dir->name);
-                }
-            }
-            list_add(&dir->entry, dir_list);
-        }
-    }
-
-    toml_free(conf);
-}
+DECLARE_MARGO_RPC_HANDLER(reg_rpc);
 
 static int init_sspace(dspaces_provider_t server, struct bbox *default_domain,
                        struct ds_gspace *dsg_l)
 {
     int err = -ENOMEM;
-    dsg_l->ssd = ssd_alloc(default_domain, dsg_l->size_sp, ds_conf.max_versions,
-                           ds_conf.hash_version);
+    dsg_l->ssd =
+        ssd_alloc(default_domain, dsg_l->size_sp, server->conf.max_versions,
+                  server->conf.hash_version);
     if(!dsg_l->ssd)
         goto err_out;
 
-    if(ds_conf.hash_version == ssd_hash_version_auto) {
-        DEBUG_OUT("server selected hash version %i for default space\n",
-                  dsg_l->ssd->hash_version);
+    if(server->conf.hash_version == ssd_hash_version_auto) {
+        DEBUG_OUT("server selected hash type %s for default space\n",
+                  hash_strings[dsg_l->ssd->hash_version]);
     }
 
     err = ssd_init(dsg_l->ssd, dsg_l->rank);
     if(err < 0)
         goto err_out;
 
-    dsg_l->default_gdim.ndim = ds_conf.ndim;
+    dsg_l->default_gdim.ndim = server->conf.ndim;
     int i;
-    for(i = 0; i < ds_conf.ndim; i++) {
-        dsg_l->default_gdim.sizes.c[i] = ds_conf.dims.c[i];
+    for(i = 0; i < server->conf.ndim; i++) {
+        dsg_l->default_gdim.sizes.c[i] = server->conf.dims.c[i];
     }
 
     INIT_LIST_HEAD(&dsg_l->sspace_list);
@@ -606,30 +307,6 @@ error:
     return (ret);
 }
 
-const char *hash_strings[] = {"Dynamic", "SFC", "Bisection"};
-
-void print_conf()
-{
-    int i;
-
-    printf("DataSpaces server config:\n");
-    printf("=========================\n");
-    printf(" Default global dimensions: (");
-    printf("%" PRIu64, ds_conf.dims.c[0]);
-    for(i = 1; i < ds_conf.ndim; i++) {
-        printf(", %" PRIu64, ds_conf.dims.c[i]);
-    }
-    printf(")\n");
-    printf(" MAX STORED VERSIONS: %i\n", ds_conf.max_versions);
-    printf(" HASH TYPE: %s\n", hash_strings[ds_conf.hash_version]);
-    if(ds_conf.num_apps >= 0) {
-        printf(" APPS EXPECTED: %i\n", ds_conf.num_apps);
-    } else {
-        printf(" RUN UNTIL KILLED\n");
-    }
-    printf("=========================\n");
-}
-
 static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
                      MPI_Comm comm)
 {
@@ -638,55 +315,61 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
     int err = -ENOMEM;
 
     /* Default values */
-    ds_conf.max_versions = 255;
-    ds_conf.hash_version = ssd_hash_version_auto;
-    ds_conf.num_apps = -1;
+    server->conf.max_versions = 255;
+    server->conf.hash_version = ssd_hash_version_auto;
+    server->conf.num_apps = -1;
 
     INIT_LIST_HEAD(&server->dirs);
+    INIT_LIST_HEAD(&server->mods);
+
+    // TODO: distribute configuration from root.
 
     ext = strrchr(conf_name, '.');
     if(!ext || strcmp(ext, ".toml") != 0) {
-        err = parse_conf(conf_name);
+        err = parse_conf(conf_name, &server->conf);
     } else {
-        err = parse_conf_toml(conf_name, &server->dirs, &server->remotes,
-                              &server->nremote);
+        server->conf.dirs = &server->dirs;
+        server->conf.remotes = &server->remotes;
+        server->conf.mods = &server->mods;
+        err = parse_conf_toml(conf_name, &server->conf);
+        server->nremote = server->conf.nremote;
     }
     if(err < 0) {
         goto err_out;
     }
 
     // Check number of dimension
-    if(ds_conf.ndim > BBOX_MAX_NDIM) {
+    if(server->conf.ndim > BBOX_MAX_NDIM) {
         fprintf(
             stderr,
             "%s(): ERROR maximum number of array dimension is %d but ndim is %d"
             " in file '%s'\n",
-            __func__, BBOX_MAX_NDIM, ds_conf.ndim, conf_name);
+            __func__, BBOX_MAX_NDIM, server->conf.ndim, conf_name);
         err = -EINVAL;
         goto err_out;
-    } else if(ds_conf.ndim == 0) {
+    } else if(server->conf.ndim == 0) {
         DEBUG_OUT(
             "no global coordinates provided. Setting trivial placeholder.\n");
-        ds_conf.ndim = 1;
-        ds_conf.dims.c[0] = 1;
+        server->conf.ndim = 1;
+        server->conf.dims.c[0] = 1;
     }
 
     // Check hash version
-    if((ds_conf.hash_version < ssd_hash_version_auto) ||
-       (ds_conf.hash_version >= _ssd_hash_version_count)) {
+    if((server->conf.hash_version < ssd_hash_version_auto) ||
+       (server->conf.hash_version >= _ssd_hash_version_count)) {
         fprintf(stderr, "%s(): ERROR unknown hash version %d in file '%s'\n",
-                __func__, ds_conf.hash_version, conf_name);
+                __func__, server->conf.hash_version, conf_name);
         err = -EINVAL;
         goto err_out;
     }
 
     struct bbox domain;
     memset(&domain, 0, sizeof(struct bbox));
-    domain.num_dims = ds_conf.ndim;
+    domain.num_dims = server->conf.ndim;
     int i;
     for(i = 0; i < domain.num_dims; i++) {
         domain.lb.c[i] = 0;
-        domain.ub.c[i] = ds_conf.dims.c[i] - 1;
+        domain.ub.c[i] = server->conf.dims.c[i] - 1;
     }
 
     dsg_l = malloc(sizeof(*dsg_l));
@@ -698,7 +381,7 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
     MPI_Comm_rank(comm, &dsg_l->rank);
 
     if(dsg_l->rank == 0) {
-        print_conf();
+        print_conf(&server->conf);
     }
 
     write_conf(server, comm);
@@ -707,20 +390,20 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
     if(err < 0) {
         goto err_free;
     }
-    dsg_l->ls = ls_alloc(ds_conf.max_versions);
+    dsg_l->ls = ls_alloc(server->conf.max_versions);
     if(!dsg_l->ls) {
         fprintf(stderr, "%s(): ERROR ls_alloc() failed\n", __func__);
         goto err_free;
     }
 
     // proxy storage
-    dsg_l->ps = ls_alloc(ds_conf.max_versions);
+    dsg_l->ps = ls_alloc(server->conf.max_versions);
     if(!dsg_l->ps) {
         fprintf(stderr, "%s(): ERROR ls_alloc() failed\n", __func__);
         goto err_free;
     }
 
-    dsg_l->num_apps = ds_conf.num_apps;
+    dsg_l->num_apps = server->conf.num_apps;
 
     INIT_LIST_HEAD(&dsg_l->obj_desc_drain_list);
 
@@ -805,15 +488,16 @@ static struct sspace *lookup_sspace(dspaces_provider_t server,
     memcpy(&ssd_entry->gdim, &gdim, sizeof(struct global_dimension));
 
     DEBUG_OUT("allocate the ssd.\n");
-    ssd_entry->ssd = ssd_alloc(&domain, dsg_l->size_sp, ds_conf.max_versions,
-                               ds_conf.hash_version);
+    ssd_entry->ssd =
+        ssd_alloc(&domain, dsg_l->size_sp, server->conf.max_versions,
+                  server->conf.hash_version);
     if(!ssd_entry->ssd) {
         fprintf(stderr, "%s(): ssd_alloc failed for '%s'\n", __func__,
                 var_name);
         return dsg_l->ssd;
     }
 
-    if(ds_conf.hash_version == ssd_hash_version_auto) {
+    if(server->conf.hash_version == ssd_hash_version_auto) {
         DEBUG_OUT("server selected hash version %i for var %s\n",
                   ssd_entry->ssd->hash_version, var_name);
     }
@@ -924,7 +608,7 @@ static int get_client_data(obj_descriptor odsc, dspaces_provider_t server)
     in.odsc.raw_odsc = (char *)(&odsc);
 
     hg_addr_t owner_addr;
-    size_t owner_addr_size = 128;
+    hg_size_t owner_addr_size = 128;
 
     margo_addr_self(server->mid, &owner_addr);
     margo_addr_to_string(server->mid, od->obj_desc.owner, &owner_addr_size,
@@ -1007,32 +691,18 @@ static void drain_thread(void *arg)
 }
 
 #ifdef DSPACES_HAVE_PYTHON
-static void *bootstrap_python()
+static void *bootstrap_python(dspaces_provider_t server)
 {
-    Py_Initialize();
-    import_array();
-}
-
-static int dspaces_init_py_mods(dspaces_provider_t server,
-                                struct dspaces_module **pmodsp)
-{
-    static const char *static_pmods[][2] = {
-        {"goes17", "s3nc_mod"},
-        {"planetary", "azure_mod"},
-        {"cmips3", "s3cmip_mod"}
-    };
     char *pypath = getenv("PYTHONPATH");
     char *new_pypath;
     int pypath_len;
-    struct dspaces_module *pmods;
-    int npmods = sizeof(static_pmods) / sizeof(static_pmods[0]);
-    PyObject *pName;
     int i;
 
     pypath_len = strlen(xstr(DSPACES_MOD_DIR)) + 1;
     if(pypath) {
         pypath_len += strlen(pypath) + 1;
     }
+
     new_pypath = malloc(pypath_len);
     if(pypath) {
         sprintf(new_pypath, "%s:%s", xstr(DSPACES_MOD_DIR), pypath);
@@ -1042,35 +712,51 @@ static int dspaces_init_py_mods(dspaces_provider_t server,
     setenv("PYTHONPATH", new_pypath, 1);
     DEBUG_OUT("New PYTHONPATH is %s\n", new_pypath);
 
-    bootstrap_python();
+    Py_InitializeEx(0);
+    import_array();
 
-    pmods = malloc(sizeof(*pmods) * npmods);
-    for(i = 0; i < npmods; i++) {
-        pmods[i].name = strdup(static_pmods[i][0]);
-        pmods[i].type = DSPACES_MOD_PY;
-        pName = PyUnicode_DecodeFSDefault(static_pmods[i][1]);
-        pmods[i].pModule = PyImport_Import(pName);
-        if(pmods[0].pModule == NULL) {
-            fprintf(stderr,
-                "WARNING: could not load %s mod from %s. File missing? Any "
-                "%s accesses will fail.\n",
-                static_pmods[i][1], xstr(DSPACES_MOD_DIR), pmods[i].name);
-        }
-        Py_DECREF(pName);
-    }   
-    free(new_pypath);
+    server->handler_state =
+        malloc(sizeof(*server->handler_state) * server->num_handlers);
 
-    *pmodsp = pmods;
-
-    return (npmods);
+    return (NULL);
 }
+
 #endif // DSPACES_HAVE_PYTHON
 
-void dspaces_init_mods(dspaces_provider_t server)
+static void init_rmap(struct dspaces_provider *server)
 {
-#ifdef DSPACES_HAVE_PYTHON
-    server->nmods = dspaces_init_py_mods(server, &server->mods);
-#endif // DSPACES_HAVE_PYTHON
+    int i;
+
+    server->handler_rmap =
+        malloc(sizeof(*server->handler_rmap) * server->num_handlers);
+    for(i = 0; i < server->num_handlers; i++) {
+        server->handler_rmap[i] = -1;
+    }
+}
+
+static int get_handler_id(struct dspaces_provider *server)
+{
+    int es_rank;
+    int i;
+
+    ABT_self_get_xstream_rank(&es_rank);
+
+    for(i = 0; i < server->num_handlers; i++) {
+        if(server->handler_rmap[i] == -1) {
+            server->handler_rmap[i] = es_rank;
+        }
+
+        if(server->handler_rmap[i] == es_rank) {
+            return (i);
+        }
+    }
+
+    fprintf(stderr,
+            "ERROR: more unique execution streams have called %s than have "
+            "been allocated for RPC handlers.\n",
+            __func__);
+
+    return (-1);
 }
 
 int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
@@ -1079,12 +765,12 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     const char *envdebug = getenv("DSPACES_DEBUG");
     const char *envnthreads = getenv("DSPACES_NUM_HANDLERS");
     const char *envdrain = getenv("DSPACES_DRAIN");
+    const char *mod_dir_str = xstr(DSPACES_MOD_DIR);
     dspaces_provider_t server;
     hg_class_t *hg;
     static int is_initialized = 0;
     hg_bool_t flag;
     hg_id_t id;
-    int num_handlers = DSPACES_DEFAULT_NUM_HANDLERS;
     struct hg_init_info hii = HG_INIT_INFO_INITIALIZER;
     char margo_conf[1024];
     struct margo_init_info mii = MARGO_INIT_INFO_INITIALIZER;
@@ -1106,9 +792,11 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
         server->f_debug = 1;
     }
 
+    server->num_handlers = DSPACES_DEFAULT_NUM_HANDLERS;
     if(envnthreads) {
-        num_handlers = atoi(envnthreads);
+        server->num_handlers = atoi(envnthreads);
     }
+    init_rmap(server);
 
     if(envdrain) {
         DEBUG_OUT("enabling data draining.\n");
@@ -1118,15 +806,12 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     MPI_Comm_dup(comm, &server->comm);
     MPI_Comm_rank(comm, &server->rank);
 
-    dspaces_init_mods(server);
-
-    const char *mod_dir_str = xstr(DSPACES_MOD_DIR);
-    DEBUG_OUT("module directory is %s\n", mod_dir_str);
+    dspaces_init_logging(server->rank);
 
     margo_set_environment(NULL);
     sprintf(margo_conf,
             "{ \"use_progress_thread\" : true, \"rpc_thread_count\" : %d }",
-            num_handlers);
+            server->num_handlers);
     hii.request_post_init = 1024;
     hii.auto_sm = false;    
     mii.hg_init_info = &hii;
@@ -1266,6 +951,10 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
                               &flag);
         DS_HG_REGISTER(hg, server->pexec_id, pexec_in_t, pexec_out_t,
                        pexec_rpc);
+        margo_registered_name(server->mid, "mpexec_rpc", &server->mpexec_id,
+                              &flag);
+        DS_HG_REGISTER(hg, server->mpexec_id, pexec_in_t, pexec_out_t,
+                       pexec_rpc);
 #endif // DSPACES_HAVE_PYTHON
         margo_registered_name(server->mid, "cond_rpc", &server->cond_id, &flag);
         DS_HG_REGISTER(hg, server->cond_id, cond_in_t, void, cond_rpc);
@@ -1277,6 +966,8 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
                               &server->get_var_objs_id, &flag);
         DS_HG_REGISTER(hg, server->get_var_objs_id, get_var_objs_in_t, odsc_hdr,
                        get_var_objs_rpc);
+        margo_registered_name(server->mid, "reg_rpc", &server->reg_id, &flag);
+        DS_HG_REGISTER(hg, server->reg_id, reg_in_t, uint64_t, reg_rpc);
     } else {
         server->put_id = MARGO_REGISTER(server->mid, "put_rpc", bulk_gdim_t,
                                         bulk_out_t, put_rpc);
@@ -1352,6 +1043,10 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
                                           pexec_out_t, pexec_rpc);
         margo_register_data(server->mid, server->pexec_id, (void *)server,
                             NULL);
+        server->mpexec_id = MARGO_REGISTER(server->mid, "mpexec_rpc",
+                                           pexec_in_t, pexec_out_t, mpexec_rpc);
+        margo_register_data(server->mid, server->mpexec_id, (void *)server,
+                            NULL);
 #endif // DSPACES_HAVE_PYTHON
         server->cond_id =
             MARGO_REGISTER(server->mid, "cond_rpc", cond_in_t, void, cond_rpc);
@@ -1367,6 +1062,9 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
                            odsc_hdr, get_var_objs_rpc);
         margo_register_data(server->mid, server->get_var_objs_id,
                             (void *)server, NULL);
+        server->reg_id =
+            MARGO_REGISTER(server->mid, "reg_rpc", reg_in_t, uint64_t, reg_rpc);
+        margo_register_data(server->mid, server->reg_id, (void *)server, NULL);
     }
     int err = dsg_alloc(server, conf_file, comm);
     if(err) {
@@ -1391,6 +1089,17 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
         DEBUG_OUT("Server will run indefinitely.\n");
     }
 
+#ifdef DSPACES_HAVE_PYTHON
+    bootstrap_python(server);
+#endif // DSPACES_HAVE_PYTHON
+
+    DEBUG_OUT("module directory is %s\n", mod_dir_str);
+    dspaces_init_mods(&server->mods);
+    dspaces_init_registry(server);
+#ifdef DSPACES_HAVE_PYTHON
+    server->main_state = PyEval_SaveThread();
+#endif // DSPACES_HAVE_PYTHON
+
     if(server->f_drain) {
         // thread to drain the data
         ABT_xstream_create(ABT_SCHED_NULL, &server->drain_xstream);
@@ -1414,6 +1123,8 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     *sv = server;
 
     is_initialized = 1;
+
+    DEBUG_OUT("server is ready for requests.\n");
 
     return dspaces_SUCCESS;
 }
@@ -1541,7 +1252,7 @@ static void address_translate(dspaces_provider_t server, char *addr_str)
 static void odsc_take_ownership(dspaces_provider_t server, obj_descriptor *odsc)
 {
     hg_addr_t owner_addr;
-    size_t owner_addr_size = 128;
+    hg_size_t owner_addr_size = 128;
 
     margo_addr_self(server->mid, &owner_addr);
     margo_addr_to_string(server->mid, odsc->owner, &owner_addr_size,
@@ -1596,7 +1307,7 @@ static void put_rpc(hg_handle_t handle)
 
     hg_size_t size = (in_odsc.size) * bbox_volume(&(in_odsc.bb));
 
-    DEBUG_OUT("Creating a bulk transfer buffer of size %li\n", size);
+    DEBUG_OUT("Creating a bulk transfer buffer of size %" PRIu64 "\n", size);
 
     hret = margo_bulk_create(mid, 1, (void **)&(od->data), &size,
                              HG_BULK_WRITE_ONLY, &bulk_handle);
@@ -1810,7 +1521,7 @@ static int query_remotes(dspaces_provider_t server, obj_descriptor *q_odsc,
     obj_descriptor *odsc;
     struct obj_data *od;
     hg_addr_t owner_addr;
-    size_t owner_addr_size = 128;
+    hg_size_t owner_addr_size = 128;
     int i;
 
     buf_size = obj_data_size(q_odsc);
@@ -1858,274 +1569,30 @@ static int query_remotes(dspaces_provider_t server, obj_descriptor *q_odsc,
     }
 }
 
-struct dspaces_module *dspaces_find_mod(dspaces_provider_t server,
-                                        const char *mod_name)
+static int route_request(dspaces_provider_t server, obj_descriptor *odsc,
+                         struct global_dimension *gdim)
 {
-    int i;
-
-    for(i = 0; i < server->nmods; i++) {
-        if(strcmp(mod_name, server->mods[i].name) == 0) {
-            return (&server->mods[i]);
-        }
-    }
-
-    return (NULL);
-}
-
-#ifdef DSPACES_HAVE_PYTHON
-PyObject *py_obj_from_arg(struct dspaces_module_args *arg)
-{
-    PyObject *pArg;
-    int i;
-
-    switch(arg->type) {
-    case DSPACES_ARG_REAL:
-        if(arg->len == -1) {
-            return (PyFloat_FromDouble(arg->rval));
-        }
-        pArg = PyTuple_New(arg->len);
-        for(i = 0; i < arg->len; i++) {
-            PyTuple_SetItem(pArg, i, PyFloat_FromDouble(arg->rarray[i]));
-        }
-        return (pArg);
-    case DSPACES_ARG_INT:
-        if(arg->len == -1) {
-            return (PyLong_FromLong(arg->ival));
-        }
-        pArg = PyTuple_New(arg->len);
-        for(i = 0; i < arg->len; i++) {
-            PyTuple_SetItem(pArg, i, PyLong_FromLong(arg->iarray[i]));
-        }
-        return (pArg);
-    case DSPACES_ARG_STR:
-        return (PyUnicode_DecodeFSDefault(arg->strval));
-    case DSPACES_ARG_NONE:
-        return (Py_None);
-    default:
-        fprintf(stderr, "ERROR: unknown arg type in %s (%d)\n", __func__,
-                arg->type);
-    }
-
-    return (NULL);
-}
-
-static struct dspaces_module_ret *py_res_buf(PyObject *pResult)
-{
-    PyArrayObject *pArray;
-    struct dspaces_module_ret *ret = malloc(sizeof(*ret));
-    size_t data_len;
-    npy_intp *dims;
-    int i;
-
-    pArray = (PyArrayObject *)pResult;
-    ret->ndim = PyArray_NDIM(pArray);
-    ret->dim = malloc(sizeof(*ret->dim * ret->ndim));
-    dims = PyArray_DIMS(pArray);
-    ret->len = 1;
-    for(i = 0; i < ret->ndim; i++) {
-        ret->dim[i] = dims[i];
-        ret->len *= dims[i];
-    }
-    ret->tag = PyArray_TYPE(pArray);
-    ret->elem_size = PyArray_ITEMSIZE(pArray);
-    data_len = ret->len * ret->elem_size;
-    ret->data = malloc(data_len);
-    memcpy(ret->data, PyArray_DATA(pArray), data_len);
-
-    return (ret);
-}
-
-static struct dspaces_module_ret *py_res_to_ret(PyObject *pResult, int ret_type)
-{
-    struct dspaces_module_ret *ret;
-
-    switch(ret_type) {
-    case DSPACES_MOD_RET_ARRAY:
-        return (py_res_buf(pResult));
-    default:
-        fprintf(stderr, "ERROR: unknown module return type in %s (%d)\n",
-                __func__, ret_type);
-        return (NULL);
-    }
-}
-
-static struct dspaces_module_ret *
-dspaces_module_py_exec(dspaces_provider_t server, struct dspaces_module *mod,
-                       const char *operation, struct dspaces_module_args *args,
-                       int nargs, int ret_type)
-{
-    PyObject *pFunc = PyObject_GetAttrString(mod->pModule, operation);
-    PyObject *pKey, *pArg, *pArgs, *pKWArgs;
-    PyObject *pResult;
-    struct dspaces_module_ret *ret;
-    int i;
-
-    DEBUG_OUT("doing python module exec.\n");
-    if(!pFunc || !PyCallable_Check(pFunc)) {
-        fprintf(
-            stderr,
-            "ERROR! Could not find executable function '%s' in module '%s'\n",
-            operation, mod->name);
-        return (NULL);
-    }
-    pArgs = PyTuple_New(0);
-    pKWArgs = PyDict_New();
-    for(i = 0; i < nargs; i++) {
-        pKey = PyUnicode_DecodeFSDefault(args[i].name);
-        pArg = py_obj_from_arg(&args[i]);
-        PyDict_SetItem(pKWArgs, pKey, pArg);
-        Py_DECREF(pKey);
-        Py_DECREF(pArg);
-    }
-    pResult = PyObject_Call(pFunc, pArgs, pKWArgs);
-    if(!pResult) {
-        PyErr_Print();
-        ret = NULL;
-    } else {
-        ret = py_res_to_ret(pResult, ret_type);
-        Py_DECREF(pResult);
-    }
-
-    Py_DECREF(pArgs);
-    Py_DECREF(pKWArgs);
-    Py_DECREF(pFunc);
-
-    return (ret);
-}
-#endif // DSPACES_HAVE_PYTHON
-
-static struct dspaces_module_ret *
-dspaces_module_exec(dspaces_provider_t server, const char *mod_name,
-                    const char *operation, struct dspaces_module_args *args,
-                    int nargs, int ret_type)
-{
-    struct dspaces_module *mod = dspaces_find_mod(server, mod_name);
-
-    DEBUG_OUT("sending '%s' to module '%s'\n", operation, mod->name);
-    if(mod->type == DSPACES_MOD_PY) {
-#ifdef DSPACES_HAVE_PYTHON
-        return (dspaces_module_py_exec(server, mod, operation, args, nargs,
-                                       ret_type));
-#else
-        fprintf(stderr, "WARNNING: tried to execute python module, but not "
-                        "python support.\n");
-        return (NULL);
-#endif // DSPACES_HAVE_PYTHON
-    } else {
-        fprintf(stderr, "ERROR: unknown module request in %s.\n", __func__);
-        return (NULL);
-    }
-}
-
-static int build_module_args_from_odsc(obj_descriptor *odsc,
-                                       struct dspaces_module_args **argsp)
-{
-    struct dspaces_module_args *args;
-    int nargs = 4;
-    int ndims;
-    int i;
-
-    args = malloc(sizeof(*args) * nargs);
-
-    // odsc->name
-    args[0].name = strdup("name");
-    args[0].type = DSPACES_ARG_STR;
-    args[0].len = strlen(odsc->name) + 1;
-    args[0].strval = strdup(odsc->name);
-
-    // odsc->version
-    args[1].name = strdup("version");
-    args[1].type = DSPACES_ARG_INT;
-    args[1].len = -1;
-    args[1].ival = odsc->version;
-
-    ndims = odsc->bb.num_dims;
-    // odsc->bb.lb
-    args[2].name = strdup("lb");
-    if(ndims > 0) {
-        args[2].name = strdup("lb");
-        args[2].type = DSPACES_ARG_INT;
-        args[2].len = ndims;
-        args[2].iarray = malloc(sizeof(*args[2].iarray) * ndims);
-        for(i = 0; i < ndims; i++) {
-            args[2].iarray[i] = odsc->bb.lb.c[i];
-        }
-    } else {
-        args[2].type = DSPACES_ARG_NONE;
-    }
-
-    // odsc->bb.ub
-    args[3].name = strdup("ub");
-    if(ndims > 0) {
-        args[3].type = DSPACES_ARG_INT;
-        args[3].len = ndims;
-        args[3].iarray = malloc(sizeof(*args[3].iarray) * ndims);
-        for(i = 0; i < ndims; i++) {
-            args[3].iarray[i] = odsc->bb.ub.c[i];
-        }
-    } else {
-        args[3].type = DSPACES_ARG_NONE;
-    }
-
-    *argsp = args;
-    return (nargs);
-}
-
-static void free_arg(struct dspaces_module_args *arg)
-{
-    if(arg) {
-        free(arg->name);
-        if(arg->len > 0 && arg->type != DSPACES_ARG_NONE) {
-            free(arg->strval);
-        }
-    } else {
-        fprintf(stderr, "WARNING: trying to free NULL argument in %s\n",
-                __func__);
-    }
-}
-
-static void free_arg_list(struct dspaces_module_args *args, int len)
-{
-    int i;
-
-    if(args) {
-        for(i = 0; i < len; i++) {
-            free_arg(&args[i]);
-        }
-    } else if(len > 0) {
-        fprintf(stderr, "WARNING: trying to free NULL argument list in %s\n",
-                __func__);
-    }
-}
-
-static void route_request(dspaces_provider_t server, obj_descriptor *odsc,
-                          struct global_dimension *gdim)
-{
-    static const char *module_nspaces[][2] = {
-        {"goes17\\", "goes17"},
-        {"cmip6-planetary\\", "planetary"},
-        {"cmip6-s3\\", "cmips3"},
-        {NULL, NULL}
-    };
-    const char *s3nc_nspace = "goes17\\";
-    const char *azure_nspace = "cmip6-planetary\\";
-    const char *s3cmip_nspace = "cmip6-s3\\";
+    struct dspaces_module *mod;
     struct dspaces_module_args *args;
     struct dspaces_module_ret *res = NULL;
     struct obj_data *od;
     obj_descriptor *od_odsc;
-    char **mod_desc;
     int nargs;
-    int i;
+    int i, err;
 
     DEBUG_OUT("Routing '%s'\n", odsc->name);
 
-    for(mod_desc = (char **)module_nspaces[0]; mod_desc[0] != NULL; mod_desc+=2) {
-        if(strstr(odsc->name, mod_desc[0]) == odsc->name) {
-             nargs = build_module_args_from_odsc(odsc, &args);
-             res = dspaces_module_exec(server, mod_desc[1], "query", args,
-                                        nargs, DSPACES_MOD_RET_ARRAY);
-        }
+    mod = dspaces_mod_by_od(&server->mods, odsc);
+    if(mod) {
+        nargs = build_module_args_from_odsc(odsc, &args);
+        res = dspaces_module_exec(mod, "query", args, nargs,
+                                  DSPACES_MOD_RET_ARRAY);
+    }
+
+    if(res && res->type == DSPACES_MOD_RET_ERR) {
+        err = res->err;
+        free(res);
+        return (err);
     }
 
     if(res) {
@@ -2138,17 +1605,22 @@ static void route_request(dspaces_provider_t server, obj_descriptor *odsc,
             free(res->data);
         } else {
             odsc->size = res->elem_size;
-            if(odsc->bb.num_dims == 0) {
+            if(odsc->bb.num_dims != res->ndim) {
+                DEBUG_OUT("change in dimensionality.\n");
                 odsc->bb.num_dims = res->ndim;
                 obj_data_resize(odsc, res->dim);
             } else if((odsc->size * res->len) != obj_data_size(odsc)) {
                 DEBUG_OUT("returned data is cropped.\n");
                 obj_data_resize(odsc, res->dim);
             }
+            // TODO: refactor to convert ret->odsc in function
             od_odsc = malloc(sizeof(*od_odsc));
             memcpy(od_odsc, odsc, sizeof(*od_odsc));
             odsc_take_ownership(server, od_odsc);
             od_odsc->tag = res->tag;
+            if(odsc->tag == 0) {
+                odsc->tag = res->tag;
+            }
             od = obj_data_alloc_no_data(od_odsc, res->data);
             memcpy(&od->gdim, gdim, sizeof(struct global_dimension));
             DEBUG_OUT("adding object to local storage: %s\n",
@@ -2161,12 +1633,102 @@ static void route_request(dspaces_provider_t server, obj_descriptor *odsc,
         }
         free(res);
     }
+
+    return (0);
 }
 
 // should we handle this locally
 static int local_responsibility(dspaces_provider_t server, obj_descriptor *odsc)
 {
     return (!server->remotes || ls_lookup(server->dsg->ls, odsc->name));
+}
+
+static void send_tgt_rpc(dspaces_provider_t server, hg_id_t rpc_id, int target,
+                         void *in, hg_addr_t *addr, hg_handle_t *h,
+                         margo_request *req)
+{
+    DEBUG_OUT("sending rpc_id %" PRIu64 " to rank %i\n", rpc_id, target);
+    margo_addr_lookup(server->mid, server->server_address[target], addr);
+    margo_create(server->mid, *addr, rpc_id, h);
+    margo_iforward(*h, in, req);
+}
+
+struct ibcast_state {
+    int sent_rpc[3];
+    hg_addr_t addr[3];
+    hg_handle_t hndl[3];
+    margo_request req[3];
+};
+
+static struct ibcast_state *ibcast_rpc_start(dspaces_provider_t server,
+                                             hg_id_t rpc_id, int32_t src,
+                                             void *in)
+{
+    struct ibcast_state *bcast;
+    int32_t rank, parent, child1, child2;
+
+    rank = server->dsg->rank;
+    parent = (rank - 1) / 2;
+    child1 = (rank * 2) + 1;
+    child2 = child1 + 1;
+
+    if(server->dsg->size_sp == 1 ||
+       (src == parent && child1 >= server->dsg->size_sp)) {
+        return NULL;
+    }
+
+    bcast = calloc(1, sizeof(*bcast));
+
+    if((src == -1 || src > rank) && rank > 0) {
+        DEBUG_OUT("sending to parent (%i)\n", parent);
+        send_tgt_rpc(server, rpc_id, parent, in, &bcast->addr[0],
+                     &bcast->hndl[0], &bcast->req[0]);
+        bcast->sent_rpc[0] = 1;
+    }
+    if((child1 != src && child1 < server->dsg->size_sp)) {
+        DEBUG_OUT("sending to child 1 (%i)\n", child1);
+        send_tgt_rpc(server, rpc_id, child1, in, &bcast->addr[1],
+                     &bcast->hndl[1], &bcast->req[1]);
+        bcast->sent_rpc[1] = 1;
+    }
+    if((child2 != src && child2 < server->dsg->size_sp)) {
+        DEBUG_OUT("sending to child 2 (%i)\n", child2);
+        send_tgt_rpc(server, rpc_id, child2, in, &bcast->addr[2],
+                     &bcast->hndl[2], &bcast->req[2]);
+        bcast->sent_rpc[2] = 1;
+    }
+
+    return (bcast);
+}
+
+static void ibcast_get_output(struct ibcast_state *bcast, unsigned int idx,
+                              void *out, int *present)
+{
+    if(idx > 2 || !bcast->sent_rpc[idx]) {
+        if(present) {
+            *present = 0;
+        }
+        return;
+    }
+
+    margo_wait(bcast->req[idx]);
+    margo_get_output(bcast->hndl[idx], out);
+    if(present) {
+        *present = 1;
+    }
+}
+
+static void ibcast_finish(dspaces_provider_t server, struct ibcast_state *bcast)
+{
+    int i;
+
+    for(i = 0; i < 3; i++) {
+        if(bcast->sent_rpc[i]) {
+            margo_addr_free(server->mid, bcast->addr[i]);
+            margo_destroy(bcast->hndl[i]);
+        }
+    }
+    free(bcast);
 }
 
 static int get_query_odscs(dspaces_provider_t server, odsc_gdim_t *query,
@@ -2376,7 +1938,8 @@ static void query_rpc(hg_handle_t handle)
         get_query_odscs(server, &in, timeout, &results, req_id);
 
     out.odsc_list.raw_odsc = (char *)results;
-    DEBUG_OUT("Responding with %li result(s).\n", out.odsc_list.size / sizeof(obj_descriptor));
+    DEBUG_OUT("Responding with %li result(s).\n",
+              out.odsc_list.size / sizeof(obj_descriptor));
     margo_respond(handle, &out);
     margo_free_input(handle, &in);
     margo_destroy(handle);
@@ -2609,7 +2172,7 @@ static void get_rpc(hg_handle_t handle)
         return;
     }
 
-    suppress_compression = ~(in.flags & DS_NO_COMPRESS);
+    suppress_compression = in.flags & DS_NO_COMPRESS;
 
     obj_descriptor in_odsc;
     memcpy(&in_odsc, in.odsc.raw_odsc, sizeof(in_odsc));
@@ -2635,7 +2198,7 @@ static void get_rpc(hg_handle_t handle)
     cbuffer = malloc(size);
     hret = margo_bulk_create(mid, 1, (void **)&cbuffer, &size,
                              HG_BULK_READ_ONLY, &bulk_handle);
-    DEBUG_OUT("created bulk handle of size %li\n", size);
+    DEBUG_OUT("created bulk handle of size %" PRIu64 "\n", size);
     if(hret != HG_SUCCESS) {
         fprintf(stderr, "ERROR: (%s): margo_bulk_create() failure\n", __func__);
         out.ret = dspaces_ERR_MERCURY;
@@ -2650,7 +2213,8 @@ static void get_rpc(hg_handle_t handle)
         /* things like CPU->GPU transfer don't support compression, but we need
          * the client to tell us. */
         csize = LZ4_compress_default(od->data, cbuffer, size, size);
-        DEBUG_OUT("compressed result from %li to %i bytes.\n", size, csize);
+        DEBUG_OUT("compressed result from %" PRIu64 " to %i bytes.\n", size,
+                  csize);
         if(!csize) {
             DEBUG_OUT(
                 "compressed result could not fit in dst buffer - longer than "
@@ -2844,16 +2408,16 @@ static void ss_rpc(hg_handle_t handle)
     DEBUG_OUT("received ss_rpc\n");
 
     ss_info_hdr ss_data;
-    ss_data.num_dims = ds_conf.ndim;
+    ss_data.num_dims = server->conf.ndim;
     ss_data.num_space_srv = server->dsg->size_sp;
-    ss_data.max_versions = ds_conf.max_versions;
-    ss_data.hash_version = ds_conf.hash_version;
-    ss_data.default_gdim.ndim = ds_conf.ndim;
+    ss_data.max_versions = server->conf.max_versions;
+    ss_data.hash_version = server->conf.hash_version;
+    ss_data.default_gdim.ndim = server->conf.ndim;
 
-    for(int i = 0; i < ds_conf.ndim; i++) {
+    for(int i = 0; i < server->conf.ndim; i++) {
         ss_data.ss_domain.lb.c[i] = 0;
-        ss_data.ss_domain.ub.c[i] = ds_conf.dims.c[i] - 1;
-        ss_data.default_gdim.sizes.c[i] = ds_conf.dims.c[i];
+        ss_data.ss_domain.ub.c[i] = server->conf.dims.c[i] - 1;
+        ss_data.default_gdim.sizes.c[i] = server->conf.dims.c[i];
     }
 
     out.ss_buf.size = sizeof(ss_info_hdr);
@@ -2886,16 +2450,14 @@ static void kill_rpc(hg_handle_t handle)
     const struct hg_info *info = margo_get_info(handle);
     dspaces_provider_t server =
         (dspaces_provider_t)margo_registered_data(mid, info->id);
-    int32_t src, rank, parent, child1, child2;
+    struct ibcast_state *bcast;
+    int32_t src, rank;
     int do_kill = 0;
 
     margo_get_input(handle, &src);
     DEBUG_OUT("Received kill signal from %d.\n", src);
 
     rank = server->dsg->rank;
-    parent = (rank - 1) / 2;
-    child1 = (rank * 2) + 1;
-    child2 = child1 + 1;
 
     ABT_mutex_lock(server->kill_mutex);
     DEBUG_OUT("Kill tokens remaining: %d\n",
@@ -2914,14 +2476,9 @@ static void kill_rpc(hg_handle_t handle)
 
     ABT_mutex_unlock(server->kill_mutex);
 
-    if((src == -1 || src > rank) && rank > 0) {
-        send_kill_rpc(server, parent, &rank);
-    }
-    if((child1 != src && child1 < server->dsg->size_sp)) {
-        send_kill_rpc(server, child1, &rank);
-    }
-    if((child2 != src && child2 < server->dsg->size_sp)) {
-        send_kill_rpc(server, child2, &rank);
+    bcast = ibcast_rpc_start(server, server->kill_id, src, &rank);
+    if(bcast) {
+        ibcast_finish(server, bcast);
     }
 
     margo_free_input(handle, &src);
@@ -3055,11 +2612,15 @@ static void do_ops_rpc(hg_handle_t handle)
     buffer = malloc(res_buf_size);
     cbuffer = malloc(res_buf_size);
     if(expr->type == DS_VAL_INT) {
+        DEBUG_OUT("Executing integer operation on %" PRIu64 " elements\n",
+                  res_buf_size / sizeof(int));
 #pragma omp for
         for(i = 0; i < res_buf_size / sizeof(int); i++) {
             ((int *)buffer)[i] = ds_op_calc_ival(expr, i, &err);
         }
     } else if(expr->type == DS_VAL_REAL) {
+        DEBUG_OUT("Executing real operation on %" PRIu64 " elements\n",
+                  res_buf_size / sizeof(double));
 #pragma omp for
         for(i = 0; i < res_buf_size / sizeof(double); i++) {
             ((double *)buffer)[i] = ds_op_calc_rval(expr, i, &err);
@@ -3068,7 +2629,6 @@ static void do_ops_rpc(hg_handle_t handle)
         fprintf(stderr, "ERROR: %s: invalid expression data type.\n", __func__);
         goto cleanup;
     }
-
     size = res_buf_size;
     hret = margo_bulk_create(mid, 1, (void **)&cbuffer, &size,
                              HG_BULK_READ_ONLY, &bulk_handle);
@@ -3081,7 +2641,7 @@ static void do_ops_rpc(hg_handle_t handle)
 
     csize = LZ4_compress_default(buffer, cbuffer, size, size);
 
-    DEBUG_OUT("compressed result from %li to %i bytes.\n", size, csize);
+    DEBUG_OUT("compressed result from %" PRIu64 " to %i bytes.\n", size, csize);
     if(!csize) {
         DEBUG_OUT("compressed result could not fit in dst buffer - longer than "
                   "original! Sending uncompressed.\n");
@@ -3123,7 +2683,7 @@ static PyObject *build_ndarray_from_od(struct obj_data *od)
     int i;
 
     for(i = 0; i < ndim; i++) {
-        dims[i] = (odsc->bb.ub.c[i] - odsc->bb.lb.c[i]) + 1;
+        dims[(ndim - i) - 1] = (odsc->bb.ub.c[i] - odsc->bb.lb.c[i]) + 1;
     }
 
     arr = PyArray_NewFromDescr(&PyArray_Type, descr, ndim, dims, NULL, data, 0,
@@ -3134,6 +2694,7 @@ static PyObject *build_ndarray_from_od(struct obj_data *od)
 
 static void pexec_rpc(hg_handle_t handle)
 {
+    PyGILState_STATE gstate;
     margo_instance_id mid = margo_hg_handle_get_instance(handle);
     const struct hg_info *info = margo_get_info(handle);
     dspaces_provider_t server =
@@ -3201,7 +2762,8 @@ static void pexec_rpc(hg_handle_t handle)
     ABT_mutex_lock(server->ls_mutex);
     num_obj = ls_find_all(server->dsg->ls, &in_odsc, &from_objs);
     if(num_obj > 0) {
-        DEBUG_OUT("found %i objects in local storage to populate input\n", num_obj);
+        DEBUG_OUT("found %i objects in local storage to populate input\n",
+                  num_obj);
         arg_obj = obj_data_alloc(&in_odsc);
         od_tab = malloc(num_obj * sizeof(*od_tab));
         for(i = 0; i < num_obj; i++) {
@@ -3217,7 +2779,7 @@ static void pexec_rpc(hg_handle_t handle)
     }
     ABT_mutex_unlock(server->ls_mutex);
     if(num_obj < 1) {
-        DEBUG_OUT("could not find input object\n");   
+        DEBUG_OUT("could not find input object\n");
         out.length = 0;
         out.handle = 0;
         margo_respond(handle, &out);
@@ -3227,14 +2789,15 @@ static void pexec_rpc(hg_handle_t handle)
     } else if(from_objs) {
         free(from_objs);
     }
+    gstate = PyGILState_Ensure();
     array = build_ndarray_from_od(arg_obj);
 
-    // Race condition? Protect with mutex?
     if((pklmod == NULL) &&
        (pklmod = PyImport_ImportModuleNoBlock("dill")) == NULL) {
         margo_respond(handle, &out);
         margo_free_input(handle, &in);
         margo_destroy(handle);
+        PyGILState_Release(gstate);
         return;
     }
     arg = PyBytes_FromStringAndSize(fn, rdma_size);
@@ -3254,6 +2817,7 @@ static void pexec_rpc(hg_handle_t handle)
         margo_respond(handle, &out);
         margo_free_input(handle, &in);
         margo_destroy(handle);
+        PyGILState_Release(gstate);
         return;
     }
 
@@ -3273,6 +2837,7 @@ static void pexec_rpc(hg_handle_t handle)
             margo_respond(handle, &out);
             margo_free_input(handle, &in);
             margo_destroy(handle);
+            PyGILState_Release(gstate);
             return;
         }
         out.length = rdma_size;
@@ -3282,6 +2847,7 @@ static void pexec_rpc(hg_handle_t handle)
         }
         out.length = 0;
     }
+    PyGILState_Release(gstate);
 
     if(out.length > 0) {
         ABT_cond_create(&cond);
@@ -3308,10 +2874,251 @@ static void pexec_rpc(hg_handle_t handle)
 
     DEBUG_OUT("done with pexec handling\n");
 
+    gstate = PyGILState_Ensure();
     Py_XDECREF(array);
+    PyGILState_Release(gstate);
     obj_data_free(arg_obj);
 }
 DEFINE_MARGO_RPC_HANDLER(pexec_rpc)
+
+static void mpexec_rpc(hg_handle_t handle)
+{
+    PyGILState_STATE gstate;
+    margo_instance_id mid = margo_hg_handle_get_instance(handle);
+    const struct hg_info *info = margo_get_info(handle);
+    dspaces_provider_t server =
+        (dspaces_provider_t)margo_registered_data(mid, info->id);
+    pexec_in_t in;
+    pexec_out_t out;
+    hg_return_t hret;
+    hg_bulk_t bulk_handle;
+    obj_descriptor *in_odsc, *in_odscs, odsc;
+    int num_args;
+    hg_size_t rdma_size;
+    void *fn = NULL, *res_data;
+    struct obj_data *od, **arg_objs, *arg_obj, **od_tab, **from_objs = NULL;
+    int num_obj;
+    PyObject **arg_arrays, *fnp, *arg, *args, *pres, *pres_bytes;
+    static PyObject *pklmod = NULL;
+    ABT_cond cond;
+    ABT_mutex mtx;
+    int i, j;
+
+    hret = margo_get_input(handle, &in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr,
+                "DATASPACES: ERROR handling %s: margo_get_input() failed with "
+                "%d.\n",
+                __func__, hret);
+        margo_destroy(handle);
+        return;
+    }
+    in_odscs = (obj_descriptor *)in.odsc.raw_odsc;
+    num_args = in.odsc.size / sizeof(*in_odscs);
+
+    DEBUG_OUT("received mpexec request with %i args\n", num_args);
+    rdma_size = in.length;
+    if(rdma_size > 0) {
+        DEBUG_OUT("function included, length %" PRIu32 " bytes\n", in.length);
+        fn = malloc(rdma_size);
+        hret = margo_bulk_create(mid, 1, (void **)&(fn), &rdma_size,
+                                 HG_BULK_WRITE_ONLY, &bulk_handle);
+
+        if(hret != HG_SUCCESS) {
+            // TODO: communicate failure
+            fprintf(stderr, "ERROR: (%s): margo_bulk_create failed!\n",
+                    __func__);
+            margo_respond(handle, &out);
+            margo_free_input(handle, &in);
+            margo_destroy(handle);
+            return;
+        }
+
+        hret = margo_bulk_transfer(mid, HG_BULK_PULL, info->addr, in.handle, 0,
+                                   bulk_handle, 0, rdma_size);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): margo_bulk_transfer failed!\n",
+                    __func__);
+            margo_respond(handle, &out);
+            margo_free_input(handle, &in);
+            margo_bulk_free(bulk_handle);
+            margo_destroy(handle);
+            return;
+        }
+    }
+    margo_bulk_free(bulk_handle);
+
+    arg_objs = calloc(num_args, sizeof(*arg_objs));
+    arg_arrays = calloc(num_args, sizeof(*arg_arrays));
+    for(i = 0; i < num_args; i++) {
+        route_request(server, &in_odscs[i], &(server->dsg->default_gdim));
+
+        in_odsc = &in_odscs[i];
+        DEBUG_OUT("searching for local storage objects to satisfy %s\n",
+                  obj_desc_sprint(in_odsc));
+        ABT_mutex_lock(server->ls_mutex);
+        num_obj = ls_find_all(server->dsg->ls, in_odsc, &from_objs);
+        if(num_obj > 0) {
+            // need one source of information - metadata case?
+            if(in_odsc->size == 0) {
+                in_odsc->size = from_objs[0]->obj_desc.size;
+            }
+            DEBUG_OUT("found %i objects in local storage to populate input\n",
+                      num_obj);
+            arg_objs[i] = obj_data_alloc(in_odsc);
+            od_tab = malloc(num_obj * sizeof(*od_tab));
+            for(j = 0; j < num_obj; j++) {
+                // Can we skip the intermediate copy?
+                odsc = from_objs[j]->obj_desc;
+                DEBUG_OUT("getting data from %s\n", obj_desc_sprint(&odsc));
+                bbox_intersect(&in_odsc->bb, &odsc.bb, &odsc.bb);
+                od_tab[j] = obj_data_alloc(&odsc);
+                DEBUG_OUT("overlap = %s\n",
+                          obj_desc_sprint(&od_tab[j]->obj_desc));
+                ssd_copy(od_tab[j], from_objs[j]);
+                ssd_copy(arg_objs[i], od_tab[j]);
+                obj_data_free(od_tab[j]);
+            }
+            free(od_tab);
+        }
+        ABT_mutex_unlock(server->ls_mutex);
+        if(num_obj < 1) {
+            DEBUG_OUT("could not find input object\n");
+            out.length = 0;
+            out.handle = 0;
+            margo_respond(handle, &out);
+            margo_free_input(handle, &in);
+            margo_destroy(handle);
+            free(arg_arrays);
+            for(j = 0; j < i; j++) {
+                obj_data_free(arg_objs[j]);
+            }
+            free(arg_objs);
+            return;
+        } else if(from_objs) {
+            free(from_objs);
+        }
+
+        arg_arrays[i] = build_ndarray_from_od(arg_objs[i]);
+        DEBUG_OUT("created ndarray for %s\n",
+                  obj_desc_sprint(&arg_objs[i]->obj_desc));
+    }
+
+    gstate = PyGILState_Ensure();
+    if((pklmod == NULL) &&
+       (pklmod = PyImport_ImportModuleNoBlock("dill")) == NULL) {
+        out.length = 0;
+        out.handle = 0;
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_destroy(handle);
+        free(arg_arrays);
+        free(arg_objs);
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_destroy(handle);
+        PyGILState_Release(gstate);
+        return;
+    }
+    arg = PyBytes_FromStringAndSize(fn, rdma_size);
+    fnp = PyObject_CallMethodObjArgs(pklmod, PyUnicode_FromString("loads"), arg,
+                                     NULL);
+    Py_XDECREF(arg);
+
+    args = PyTuple_New(num_args);
+    for(i = 0; i < num_args; i++) {
+        PyTuple_SetItem(args, i, arg_arrays[i]);
+    }
+    if(fnp && PyCallable_Check(fnp)) {
+        pres = PyObject_CallObject(fnp, args);
+    } else {
+        if(!fnp) {
+            PyErr_Print();
+        }
+        fprintf(stderr,
+                "ERROR: (%s): provided function could either not be loaded, or "
+                "is not callable.\n",
+                __func__);
+        out.length = 0;
+        out.handle = 0;
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_destroy(handle);
+        free(arg_arrays);
+        free(arg_objs);
+        margo_respond(handle, &out);
+        margo_free_input(handle, &in);
+        margo_destroy(handle);
+        PyGILState_Release(gstate);
+        return;
+    }
+
+    if(pres && (pres != Py_None)) {
+        pres_bytes = PyObject_CallMethodObjArgs(
+            pklmod, PyUnicode_FromString("dumps"), pres, NULL);
+        Py_XDECREF(pres);
+        res_data = PyBytes_AsString(pres_bytes);
+        rdma_size = PyBytes_Size(pres_bytes) + 1;
+        hret = margo_bulk_create(mid, 1, (void **)&res_data, &rdma_size,
+                                 HG_BULK_READ_ONLY, &out.handle);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): margo_bulk_create failed with %d.\n",
+                    __func__, hret);
+            out.length = 0;
+            out.handle = 0;
+            margo_respond(handle, &out);
+            margo_free_input(handle, &in);
+            margo_destroy(handle);
+            PyGILState_Release(gstate);
+            return;
+        }
+        out.length = rdma_size;
+    } else {
+        if(!pres) {
+            PyErr_Print();
+        }
+        out.length = 0;
+    }
+    PyGILState_Release(gstate);
+
+    if(out.length > 0) {
+        ABT_cond_create(&cond);
+        ABT_mutex_create(&mtx);
+        out.condp = (uint64_t)(&cond);
+        out.mtxp = (uint64_t)(&mtx);
+        DEBUG_OUT("sending out.condp = %" PRIu64 " and out.mtxp = %" PRIu64
+                  "\n",
+                  out.condp, out.mtxp);
+        ABT_mutex_lock(mtx);
+        margo_respond(handle, &out);
+        ABT_cond_wait(cond, mtx);
+        DEBUG_OUT("signaled on condition\n");
+        ABT_mutex_unlock(mtx);
+        ABT_mutex_free(&mtx);
+        ABT_cond_free(&cond);
+    } else {
+        out.handle = 0;
+        margo_respond(handle, &out);
+    }
+
+    margo_free_input(handle, &in);
+    margo_destroy(handle);
+
+    DEBUG_OUT("done with pexec handling\n");
+
+    gstate = PyGILState_Ensure();
+    Py_XDECREF(args);
+    PyGILState_Release(gstate);
+    free(arg_arrays);
+    if(num_args) {
+        for(i = 0; i < num_args; i++) {
+            obj_data_free(arg_objs[i]);
+        }
+        free(arg_objs);
+    }
+}
+DEFINE_MARGO_RPC_HANDLER(mpexec_rpc)
+
 #endif // DSPACES_HAVE_PYTHON
 
 static void cond_rpc(hg_handle_t handle)
@@ -3338,59 +3145,27 @@ static void cond_rpc(hg_handle_t handle)
 }
 DEFINE_MARGO_RPC_HANDLER(cond_rpc)
 
-static void send_tgt_rpc(dspaces_provider_t server, hg_id_t rpc_id, int target,
-                         void *in, hg_addr_t *addr, hg_handle_t *h,
-                         margo_request *req)
-{
-    margo_addr_lookup(server->mid, server->server_address[target], addr);
-    margo_create(server->mid, *addr, rpc_id, h);
-    margo_iforward(*h, in, req);
-}
-
 static void get_vars_rpc(hg_handle_t handle)
 {
     margo_instance_id mid = margo_hg_handle_get_instance(handle);
     const struct hg_info *info = margo_get_info(handle);
     dspaces_provider_t server =
         (dspaces_provider_t)margo_registered_data(mid, info->id);
-    int32_t src, rank, parent, child1, child2;
-    int sent_rpc[3] = {0};
-    hg_addr_t addr[3];
-    hg_handle_t hndl[3];
-    margo_request req[3];
-    name_list_t out[3];
-    name_list_t rout;
+    struct ibcast_state *bcast;
+    int32_t src, rank;
+    name_list_t out[3] = {0};
+    name_list_t rout = {0};
     ds_str_hash *results = ds_str_hash_init();
+    int present;
     int num_vars;
-    char **names;
+    char **names = NULL;
     int i, j;
 
     margo_get_input(handle, &src);
     DEBUG_OUT("Received request for all variable names from %d\n", src);
 
     rank = server->dsg->rank;
-    parent = (rank - 1) / 2;
-    child1 = (rank * 2) + 1;
-    child2 = child1 + 1;
-
-    if((src == -1 || src > rank) && rank > 0) {
-        DEBUG_OUT("querying parent %d\n", parent);
-        send_tgt_rpc(server, server->get_vars_id, parent, &rank, &addr[0],
-                     &hndl[0], &req[0]);
-        sent_rpc[0] = 1;
-    }
-    if((child1 != src && child1 < server->dsg->size_sp)) {
-        DEBUG_OUT("querying child %d\n", child1);
-        send_tgt_rpc(server, server->get_vars_id, child1, &rank, &addr[1],
-                     &hndl[1], &req[1]);
-        sent_rpc[1] = 1;
-    }
-    if((child2 != src && child2 < server->dsg->size_sp)) {
-        DEBUG_OUT("querying child %d\n", child2);
-        send_tgt_rpc(server, server->get_vars_id, child2, &rank, &addr[2],
-                     &hndl[2], &req[2]);
-        sent_rpc[2] = 1;
-    }
+    bcast = ibcast_rpc_start(server, server->get_vars_id, src, &rank);
 
     ABT_mutex_lock(server->ls_mutex);
     num_vars = ls_get_var_names(server->dsg->ls, &names);
@@ -3402,23 +3177,24 @@ static void get_vars_rpc(hg_handle_t handle)
         ds_str_hash_add(results, names[i]);
         free(names[i]);
     }
-    free(names);
+    if(names) {
+        free(names);
+    }
 
-    for(i = 0; i < 3; i++) {
-        if(sent_rpc[i]) {
-            margo_wait(req[i]);
-            margo_get_output(hndl[i], &out[i]);
-            for(j = 0; j < out[i].count; j++) {
-                ds_str_hash_add(results, out[i].names[j]);
+    if(bcast) {
+        for(i = 0; i < 3; i++) {
+            ibcast_get_output(bcast, i, &out[i], &present);
+            if(present) {
+                for(j = 0; j < out[i].count; j++) {
+                    ds_str_hash_add(results, out[i].names[j]);
+                }
             }
-            margo_free_output(hndl[i], &out);
-            margo_addr_free(server->mid, addr[i]);
-            margo_destroy(hndl[i]);
         }
+        ibcast_finish(server, bcast);
     }
 
     rout.count = ds_str_hash_get_all(results, &rout.names);
-    DEBUG_OUT("returning %zi variable names\n", rout.count);
+    DEBUG_OUT("returning %" PRIu64 " variable names\n", rout.count);
     margo_respond(handle, &rout);
     for(i = 0; i < rout.count; i++) {
         free(rout.names[i]);
@@ -3436,16 +3212,14 @@ static void get_var_objs_rpc(hg_handle_t handle)
     const struct hg_info *info = margo_get_info(handle);
     dspaces_provider_t server =
         (dspaces_provider_t)margo_registered_data(mid, info->id);
-    get_var_objs_in_t in, tgt_in;
-    int32_t src, rank, parent, child1, child2;
-    int sent_rpc[3] = {0};
-    hg_addr_t addr[3];
-    hg_handle_t hndl[3];
-    margo_request req[3];
+    get_var_objs_in_t in, bcast_in;
+    struct ibcast_state *bcast;
+    int32_t src, rank;
     odsc_hdr out[3];
     obj_descriptor **odsc_tab;
     int i;
     int num_odscs;
+    int present;
     odsc_hdr rout;
     hg_return_t hret;
 
@@ -3456,31 +3230,11 @@ static void get_var_objs_rpc(hg_handle_t handle)
               src);
 
     rank = server->dsg->rank;
-    parent = (rank - 1) / 2;
-    child1 = (rank * 2) + 1;
-    child2 = child1 + 1;
 
-    tgt_in.src = rank;
-    tgt_in.var_name = in.var_name;
+    bcast_in.src = rank;
+    bcast_in.var_name = in.var_name;
 
-    if((src == -1 || src > rank) && rank > 0) {
-        DEBUG_OUT("querying parent %d\n", parent);
-        send_tgt_rpc(server, server->get_var_objs_id, parent, &tgt_in, &addr[0],
-                     &hndl[0], &req[0]);
-        sent_rpc[0] = 1;
-    }
-    if((child1 != src && child1 < server->dsg->size_sp)) {
-        DEBUG_OUT("querying child %d\n", child1);
-        send_tgt_rpc(server, server->get_var_objs_id, child1, &tgt_in, &addr[1],
-                     &hndl[1], &req[1]);
-        sent_rpc[1] = 1;
-    }
-    if((child2 != src && child2 < server->dsg->size_sp)) {
-        DEBUG_OUT("querying child %d\n", child2);
-        send_tgt_rpc(server, server->get_var_objs_id, child2, &tgt_in, &addr[2],
-                     &hndl[2], &req[2]);
-        sent_rpc[2] = 1;
-    }
+    bcast = ibcast_rpc_start(server, server->get_var_objs_id, src, &bcast_in);
 
     ABT_mutex_lock(server->ls_mutex);
     num_odscs = ls_find_all_no_version(server->dsg->ls, in.var_name, &odsc_tab);
@@ -3498,17 +3252,16 @@ static void get_var_objs_rpc(hg_handle_t handle)
 
     DEBUG_OUT("found %d object descriptors locally.\n", num_odscs);
 
-    for(i = 0; i < 3; i++) {
-        if(sent_rpc[i]) {
-            margo_wait(req[i]);
-            margo_get_output(hndl[i], &out[i]);
-            rout.raw_odsc = realloc(rout.raw_odsc, rout.size + out[i].size);
-            memcpy(rout.raw_odsc + rout.size, out[i].raw_odsc, out[i].size);
-            rout.size += out[i].size;
-            margo_free_output(hndl[i], &out);
-            margo_addr_free(server->mid, addr[i]);
-            margo_destroy(hndl[i]);
+    if(bcast) {
+        for(i = 0; i < 3; i++) {
+            ibcast_get_output(bcast, i, &out[i], &present);
+            if(present) {
+                rout.raw_odsc = realloc(rout.raw_odsc, rout.size + out[i].size);
+                memcpy(rout.raw_odsc + rout.size, out[i].raw_odsc, out[i].size);
+                rout.size += out[i].size;
+            }
         }
+        ibcast_finish(server, bcast);
     }
 
     DEBUG_OUT("returning %zi objects.\n", rout.size / sizeof(obj_descriptor));
@@ -3522,18 +3275,151 @@ static void get_var_objs_rpc(hg_handle_t handle)
 }
 DEFINE_MARGO_RPC_HANDLER(get_var_objs_rpc)
 
+static int dspaces_init_registry(dspaces_provider_t server)
+{
+    struct dspaces_module *mod;
+    struct dspaces_module_args arg;
+    struct dspaces_module_ret *res = NULL;
+    int err;
+
+    server->local_reg_id = 0;
+
+    mod = dspaces_mod_by_name(&server->mods, "ds_reg");
+
+    if(!mod) {
+        fprintf(stderr, "missing built-in ds_reg module.\n");
+        return (-1);
+    }
+
+    build_module_arg_from_rank(server->rank, &arg);
+    res =
+        dspaces_module_exec(mod, "bootstrap_id", &arg, 1, DSPACES_MOD_RET_INT);
+    if(res && res->type == DSPACES_MOD_RET_ERR) {
+        err = res->err;
+        free(res);
+        return (err);
+    }
+    if(res) {
+        server->local_reg_id = res->ival;
+    }
+
+    DEBUG_OUT("local registry id starting at %i\n", server->local_reg_id);
+
+    return (0);
+}
+
+static int route_registration(dspaces_provider_t server, reg_in_t *reg)
+{
+    struct dspaces_module *mod, *reg_mod;
+    int nargs;
+    struct dspaces_module_ret *res = NULL;
+    struct dspaces_module_args *args;
+    int err;
+
+    DEBUG_OUT("routing registration request.\n");
+
+    mod = dspaces_mod_by_name(&server->mods, reg->type);
+    if(!mod) {
+        DEBUG_OUT("could not find module for type '%s'.\n", reg->type);
+        return (DS_MOD_ENOMOD);
+    }
+
+    // ds_reg module doesn't have access to the map between dspaces module name
+    // and Python module name, so translate for it.
+    free(reg->type);
+    reg->type = strdup(mod->file);
+
+    reg_mod = dspaces_mod_by_name(&server->mods, "ds_reg");
+    if(!reg_mod) {
+        return (DS_MOD_EFAULT);
+    }
+    nargs = build_module_args_from_reg(reg, &args);
+    res = dspaces_module_exec(reg_mod, "register", args, nargs,
+                              DSPACES_MOD_RET_INT);
+    if(!res) {
+        return (DS_MOD_EFAULT);
+    }
+    if(res->type == DSPACES_MOD_RET_ERR) {
+        err = res->err;
+        free(res);
+        return (err);
+    }
+    if(res->ival != reg->id) {
+        DEBUG_OUT("updating registration id to %li.\n", res->ival);
+        reg->id = res->ival;
+    }
+
+    return (0);
+}
+
+static void reg_rpc(hg_handle_t handle)
+{
+    margo_instance_id mid = margo_hg_handle_get_instance(handle);
+    const struct hg_info *info = margo_get_info(handle);
+    dspaces_provider_t server =
+        (dspaces_provider_t)margo_registered_data(mid, info->id);
+    hg_return_t hret;
+    reg_in_t in;
+    uint64_t out;
+    struct ibcast_state *bcast;
+    int i, err;
+
+    mid = margo_hg_handle_get_instance(handle);
+    info = margo_get_info(handle);
+    server = (dspaces_provider_t)margo_registered_data(mid, info->id);
+    hret = margo_get_input(handle, &in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr,
+                "DATASPACES: ERROR handling %s: margo_get_input() failed with "
+                "%d.\n",
+                __func__, hret);
+        margo_destroy(handle);
+        return;
+    }
+
+    DEBUG_OUT("received registration '%s' of type '%s' with %zi bytes of "
+              "registration data.\n",
+              in.name, in.type, strlen(in.reg_data));
+
+    if(in.src == -1) {
+        in.id = __sync_fetch_and_add(&server->local_reg_id, 1);
+        in.id += (uint64_t)server->dsg->rank << 40;
+    }
+    bcast = ibcast_rpc_start(server, server->reg_id, in.src, &in);
+    if(bcast) {
+        for(i = 0; i < 3; i++) {
+            ibcast_get_output(bcast, i, &out, NULL);
+        }
+        ibcast_finish(server, bcast);
+    }
+
+    err = route_registration(server, &in);
+    if(err != 0) {
+        out = err;
+    } else {
+        out = in.id;
+    }
+
+    margo_free_input(handle, &in);
+    margo_respond(handle, &out);
+    margo_destroy(handle);
+}
+DEFINE_MARGO_RPC_HANDLER(reg_rpc);
+
 void dspaces_server_fini(dspaces_provider_t server)
 {
-    int err;
+    int err = 0;
 
     DEBUG_OUT("waiting for finalize to occur\n");
     margo_wait_for_finalize(server->mid);
 #ifdef DSPACES_HAVE_PYTHON
+    PyEval_RestoreThread(server->main_state);
     err = Py_FinalizeEx();
 #endif // DSPACES_HAVE_PYTHON
     if(err < 0) {
         fprintf(stderr, "ERROR: Python finalize failed with %d\n", err);
     }
+    DEBUG_OUT("finalize complete\n");
     free(server);
 }
 

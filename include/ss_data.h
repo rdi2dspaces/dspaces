@@ -46,6 +46,7 @@ typedef struct {
     enum storage_type st;
     uint32_t flags;
     int tag;
+    int type;
 
     char owner[128];
     unsigned int version;
@@ -199,7 +200,8 @@ struct dht {
 
 enum sspace_hash_version {
     ssd_hash_version_auto = 0,
-    ssd_hash_version_v1, //     decompose the global data domain
+    ssd_hash_version_v0, // no hashing
+    ssd_hash_version_v1, // decompose the global data domain
                          //  using hilbert SFC
     ssd_hash_version_v2, // decompose the global data domain using
                          // recursive bisection of the longest dimension
@@ -420,6 +422,9 @@ MERCURY_GEN_PROC(pexec_out_t, ((hg_bulk_t)(handle))((int32_t)(length))(
 MERCURY_GEN_PROC(ss_information, ((odsc_hdr)(ss_buf))((hg_string_t)(chk_str)))
 MERCURY_GEN_PROC(cond_in_t, ((uint64_t)(mtxp))((uint64_t)(condp)))
 MERCURY_GEN_PROC(get_var_objs_in_t, ((hg_string_t)(var_name))((int32_t)(src)))
+MERCURY_GEN_PROC(reg_in_t,
+                 ((hg_string_t)(type))((hg_string_t)(name))(
+                     (hg_string_t)(reg_data))((int32_t)(src))((uint64_t)(id)))
 
 char *obj_desc_sprint(obj_descriptor *);
 //

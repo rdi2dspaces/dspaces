@@ -84,8 +84,26 @@ def build_cache_entry(dir_base, file_base, fcount):
     cache_file = f'{file_base}_G17_{fcount}.nc'
     return(f'{cache_dir}/{cache_file}')
 
+def validate(bucket, path):
+    if not path.endswith('.nc'):
+        raise ValueError("S3 module can only access netCDF files.")
+
+def reg_query(name, version, lb, ub, params, bucket, path):
+    if 'var_name' not in params:
+        raise ValueError
+    var_name = params['var_name']
+    cache_entry = f'{cache_base}/{bucket}/{path}'
+    if not os.path.exists(cache_entry):
+        s3.get(f'{bucket}/{path}', cache_entry)
+    data = Dataset(cache_entry)
+    array = data[var_name]
+    if lb:
+        index = [ slice(lb[x], ub[x]+1) for x in range(len(lb)) ]
+    else:
+        index = [ slice(0, x) for x in array.shape]
+    return(array[index])
+
 def query(name, version, lb, ub):
-    sys.stdout.flush()
     dir_base, file_base = build_dir_file(name, version)
     times = unpack_version(version)
     fcount = max(times[-2], times[-1])
@@ -97,18 +115,13 @@ def query(name, version, lb, ub):
     var = name.split('/')[-1]
     data = Dataset(centry)
     array = data[var]
-    print(lb, ub)
     if lb != None:
         index = [ slice(lb[x], ub[x]+1) for x in range(len(lb)) ]
     else:
         index = [ slice(0, x) for x in array.shape ]
-    print(f'index = {index}')
-    print(f'result shape = {array[index].shape}')
-    sys.stdout.flush()
-    sys.stderr.flush()
     return(array[index])
 
 if __name__ == '__main__':
-    var_name = 's3nc\\RadM/M1/C2/Rad'
+    var_name = 'goes17\\RadM/M1/C2/Rad'
     version = 505081608
     print(query(var_name, version, (1,1), (4,2)))

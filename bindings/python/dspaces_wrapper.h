@@ -26,8 +26,7 @@ PyObject *wrapper_dspaces_get(PyObject *clientppy, const char *name,
                               int version, PyObject *lbt, PyObject *ubt,
                               PyObject *dtype, int timeout);
 
-PyObject *wrapper_dspaces_pexec(PyObject *clientppy, const char *name,
-                                int version, PyObject *lbt, PyObject *ubt,
+PyObject *wrapper_dspaces_pexec(PyObject *clientppy, PyObject *req_list,
                                 PyObject *fn, const char *fn_name);
 
 void wrapper_dspaces_define_gdim(PyObject *clientppy, const char *name,
@@ -58,3 +57,6 @@ PyObject *wrapper_dspaces_op_new_pow(PyObject *exprppy1, PyObject *exprppy2);
 PyObject *wrapper_dspaces_op_new_arctan(PyObject *exprppy1);
 
 PyObject *wrapper_dspaces_ops_calc(PyObject *clientppy, PyObject *exprppy);
+
+PyObject *wrapper_dspaces_register(PyObject *clientppy, const char *type,
+                                   const char *name, const char *data);
