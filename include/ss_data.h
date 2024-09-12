@@ -22,6 +22,11 @@
 
 #include <abt.h>
 
+#ifdef HAVE_CUDA
+#include <cuda.h>
+#include <cuda_runtime_api.h>
+#endif /* HAVE_CUDA */
+
 #define MAX_VERSIONS 10
 
 #define DS_CLIENT_STORAGE 0x01
@@ -83,6 +88,26 @@ struct obj_data {
 
     /* Flag to mark if we should free this data object. */
     unsigned int f_free : 1;
+};
+
+/*
+  A view in  the matrix allows to extract any subset  of values from a
+  matrix.
+*/
+
+struct matrix_view {
+    uint64_t lb[BBOX_MAX_NDIM];
+    uint64_t ub[BBOX_MAX_NDIM];
+};
+
+/* Generic matrix representation. */
+struct matrix {
+    uint64_t dist[BBOX_MAX_NDIM];
+    int num_dims;
+    size_t size_elem;
+    enum storage_type mat_storage;
+    struct matrix_view mat_view;
+    void *pdata;
 };
 
 struct gdim_list_entry {
@@ -355,7 +380,7 @@ static inline hg_return_t hg_proc_name_list_t(hg_proc_t proc, void *data)
         if(ret != HG_SUCCESS) {
             break;
         }
-        nlist->names = malloc(sizeof(*nlist->names) * nlist->count);
+        nlist->names = (hg_string_t*)malloc(sizeof(*nlist->names) * nlist->count);
         for(i = 0; i < nlist->count; i++) {
             ret = hg_proc_hg_string_t(proc, &nlist->names[i]);
             if(ret != HG_SUCCESS) {
@@ -411,7 +436,14 @@ int ssd_init(struct sspace *, int);
 void ssd_free(struct sspace *);
 //
 
+void matrix_init(struct matrix *, enum storage_type, struct bbox *, struct bbox *, void *, size_t);
+
 int ssd_copy(struct obj_data *, struct obj_data *);
+
+#ifdef HAVE_CUDA
+int ssd_copy_cuda(struct obj_data *, struct obj_data *);
+int ssd_copy_cuda_async(struct obj_data *, struct obj_data *, cudaStream_t *stream);
+#endif /* HAVE_CUDA*/
 //
 long ssh_hash_elem_count(struct sspace *ss, const struct bbox *bb);
 //
@@ -456,6 +488,11 @@ void meta_data_free(struct meta_data *mdata);
 void obj_data_free(struct obj_data *od);
 uint64_t obj_data_size(obj_descriptor *);
 void obj_data_resize(obj_descriptor *obj_desc, uint64_t *new_dims);
+
+#ifdef HAVE_CUDA
+struct obj_data *obj_data_alloc_cuda(obj_descriptor *);
+void obj_data_free_cuda(struct obj_data *od);
+#endif /* HAVE_CUDA */
 
 int obj_desc_equals(obj_descriptor *, obj_descriptor *);
 int obj_desc_equals_no_owner(const obj_descriptor *, const obj_descriptor *);
