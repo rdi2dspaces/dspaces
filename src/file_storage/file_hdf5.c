@@ -598,8 +598,10 @@ static int hdf5_read_dataset(const char* file_name, hid_t file_id, char* dataset
         free(stride);
         return dspaces_ERR_HDF5;
     }
-
-    data = (void*) malloc(elem_num*datatype_size);
+    
+    if(!data) {
+        data = (void*) malloc(elem_num*datatype_size);
+    }
 
     status = H5Dread(dataset_id, datatype_id, memspace_id, dataspace_id, H5P_DEFAULT, data);
     if(status < 0) {
@@ -710,8 +712,11 @@ int hdf5_write_od(struct swap_config* swap_conf, struct obj_data *od)
     struct obj_data *qod, *search_od, *union_od;
 
     /* Check if we can open the file path, if not, create one at the default path */
-    if(!(check_dir_exist(swap_conf->file_dir) && check_dir_write_permission(swap_conf->file_dir)))
-    {
+    if(!check_dir_exist(swap_conf->file_dir)) {
+        fprintf(stderr, "WARNING: Swap directory: %s does not exist. "
+                        "Creating the directory.\n", swap_conf->file_dir);
+        mkdir_all_owner_permission(swap_conf->file_dir);
+    } else if(!check_dir_write_permission(swap_conf->file_dir)) {
         fprintf(stderr, "WARNING: Failed to write files into swap directory: %s "
                         "Use ./dspaces_swap as the default swap directory instead.\n",
                         swap_conf->file_dir);

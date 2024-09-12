@@ -101,7 +101,6 @@ struct dspaces_provider {
     int f_debug;
     int f_drain;
     int f_kill;
-    int f_filedebug;
 
 #ifdef HAVE_DRC
     uint32_t drc_credential_id;
@@ -771,7 +770,6 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     const char *envdebug = getenv("DSPACES_DEBUG");
     const char *envnthreads = getenv("DSPACES_NUM_HANDLERS");
     const char *envdrain = getenv("DSPACES_DRAIN");
-    const char *envfiledebug = getenv("DSPACES_FILE_DEBUG");
     const char *mod_dir_str = xstr(DSPACES_MOD_DIR);
     dspaces_provider_t server;
     hg_class_t *hg;
@@ -808,10 +806,6 @@ int dspaces_server_init(const char *listen_addr_str, MPI_Comm comm,
     if(envdrain) {
         DEBUG_OUT("enabling data draining.\n");
         server->f_drain = 1;
-    }
-
-    if(envfiledebug) {
-        server->f_filedebug = 1;
     }
 
     MPI_Comm_dup(comm, &server->comm);
@@ -1315,25 +1309,18 @@ static void put_rpc(hg_handle_t handle)
     struct obj_data_ptr_flat_list_entry *swap_od_entry;
     struct obj_data *swap_od;
 
-    if(server->f_filedebug) {
-        if(server->dsg->ls->num_obj>= 1) {
-            ABT_mutex_lock(server->ls_mutex);
-            swap_od = which_swap_out(&server->conf.swap, &server->dsg->ls_od_list);
-            ABT_mutex_unlock(server->ls_mutex);
-            hdf5_write_od(&server->conf.swap, swap_od);
-            ABT_mutex_lock(server->ls_mutex);
-            ls_remove(server->dsg->ls, swap_od);
-            list_del(&swap_od->flat_list_entry.entry);
-            ABT_mutex_unlock(server->ls_mutex);
-            obj_data_free(swap_od);
-        }
-    } else {
     while(need_swap_out(&server->conf.swap, size_MB)) {
         /* Find the od that we want to swap out */
         ABT_mutex_lock(server->ls_mutex);
         swap_od = which_swap_out(&server->conf.swap, &server->dsg->ls_od_list);
         ABT_mutex_unlock(server->ls_mutex);
-        // swap_od = swap_od_entry->od;
+        if(!swap_od) {
+            fprintf(stderr, "DATASPACES: ERROR: %s: Object data list has nothing to swap out! "
+                            "This should not happen... The primary reason could be either the "
+                            "server node memory capacity is too small, or the user-configured "
+                            "server memory quota is too small.", __func__);
+            break;
+        }
         
         /* Write od to HDF5 */
         hdf5_write_od(&server->conf.swap, swap_od);
@@ -1346,8 +1333,6 @@ static void put_rpc(hg_handle_t handle)
 
         /* Free od */
         obj_data_free(swap_od);
-        // free(swap_od_entry);
-    }
     }
     
     struct obj_data *od;
@@ -1401,7 +1386,6 @@ static void put_rpc(hg_handle_t handle)
     ABT_mutex_lock(server->ls_mutex);
     ls_add_obj(server->dsg->ls, od);
     /* add obj_data to the flat od_list for swap out */
-    // struct obj_data_ptr_flat_list_entry *od_flat_entry = ls_flat_od_list_entry_alloc(od);
     list_add_tail(&od->flat_list_entry.entry, &server->dsg->ls_od_list);
     ABT_mutex_unlock(server->ls_mutex);
 
@@ -2245,7 +2229,13 @@ static void get_rpc(hg_handle_t handle)
         ABT_mutex_lock(server->ls_mutex);
         swap_od = which_swap_out(&server->conf.swap, &server->dsg->ls_od_list);
         ABT_mutex_unlock(server->ls_mutex);
-        // swap_od = swap_od_entry->od;
+        if(!swap_od) {
+            fprintf(stderr, "DATASPACES: ERROR: %s: Object data list has nothing to swap out! "
+                            "This should not happen... The primary reason could be either the "
+                            "server node memory capacity is too small, or the user-configured "
+                            "server memory quota is too small.", __func__);
+            break;
+        }
 
         /* Write od to HDF5 */
         hdf5_write_od(&server->conf.swap, swap_od);
@@ -2258,7 +2248,6 @@ static void get_rpc(hg_handle_t handle)
         ABT_mutex_unlock(server->ls_mutex);
         /* Free od */
         obj_data_free(swap_od);
-        // free(swap_od_entry);
     }
     DEBUG_OUT("allocated target object\n");
 
@@ -2343,7 +2332,6 @@ static void get_rpc(hg_handle_t handle)
         ABT_mutex_lock(server->ls_mutex);
         ls_add_obj(server->dsg->ls, od);
         /* add obj_data to the flat od_list for swap out */
-        // od_flat_entry = ls_flat_od_list_entry_alloc(od);
         od->flat_list_entry.usecnt++;
         list_add_tail(&od->flat_list_entry.entry, &server->dsg->ls_od_list);
         ABT_mutex_unlock(server->ls_mutex);

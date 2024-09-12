@@ -150,27 +150,41 @@ static int value_when_policy(float threshold, uint64_t size_MB)
 
 static struct obj_data* fifo_which_policy(struct list_head *ls_od_list) {
     struct obj_data *od;
-    od = list_entry(ls_od_list->next, struct obj_data, flat_list_entry.entry);
-    return od;
+
+    if(list_empty(ls_od_list)) {
+        return NULL;
+    } else {
+        od = list_entry(ls_od_list->next, struct obj_data, flat_list_entry.entry);
+        return od;
+    }
 }
 
 static struct obj_data* lifo_which_policy(struct list_head *ls_od_list) {
     struct obj_data *od;
-    od = list_entry(ls_od_list->prev, struct obj_data, flat_list_entry.entry);
-    return od;
+
+    if(list_empty(ls_od_list)) {
+        return NULL;
+    } else {
+        od = list_entry(ls_od_list->prev, struct obj_data, flat_list_entry.entry);
+        return od;
+    }
 }
 
 static struct obj_data* lru_which_policy(struct list_head *ls_od_list) {
     struct obj_data *od, *min;
 
-    min = list_entry(ls_od_list->next, struct obj_data, flat_list_entry.entry);
+    if(list_empty(ls_od_list)) {
+        return NULL;
+    } else {
+        min = list_entry(ls_od_list->next, struct obj_data, flat_list_entry.entry);
 
-    list_for_each_entry(od, ls_od_list, struct obj_data, flat_list_entry.entry) {
-        if(od->flat_list_entry.usecnt < min->flat_list_entry.usecnt) {
-            min = od;
+        list_for_each_entry(od, ls_od_list, struct obj_data, flat_list_entry.entry) {
+            if(od->flat_list_entry.usecnt < min->flat_list_entry.usecnt) {
+                min = od;
+            }
         }
+        return min;
     }
-    return min;
 }
 
 int need_swap_out(struct swap_config* swap, uint64_t size_MB)
@@ -195,7 +209,7 @@ int need_swap_out(struct swap_config* swap, uint64_t size_MB)
 }
 
 struct obj_data* which_swap_out(struct swap_config *swap,
-                                                    struct list_head* ls_od_list)
+                                struct list_head* ls_od_list)
 {
     // TODO: support custom policy
     if((strcmp(swap->policy, "Default") == 0) || (strcmp(swap->policy, "FIFO") == 0)) {
