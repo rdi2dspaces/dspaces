@@ -4,7 +4,10 @@
 #include "bbox.h"
 #include "dspaces-remote.h"
 #include "list.h"
+
+#ifdef DSPACES_HAVE_FILEBACKEND
 #include "file_storage/policy.h"
+#endif
 
 static char *hash_strings[] = {"Dynamic", "Unitary", "SFC", "Bisection"};
 
