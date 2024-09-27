@@ -74,12 +74,26 @@ if(OPENMP_FOUND AND DSPACES_USE_OPENMP)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
     add_definitions(-DOPS_USE_OPENMP)
 endif()
-find_package(CURL REQUIRED)
+
 find_package(CURL)
 if(CURL_FOUND)
     add_definitions(-DDSPACES_HAVE_CURL)
 endif()
-find_package(HDF5 REQUIRED)
+
+find_package(HDF5)
+if(HDF5_FOUND)
+    add_definitions(-DDSPACES_HAVE_HDF5)
+endif()
+
+find_package(NetCDF)
+if(NetCDF_FOUND)
+    add_definitions(-DDSPACES_HAVE_NetCDF)
+endif()
+
+if(HDF5_FOUND OR NetCDF_FOUND)
+    option(FILEBACKEND_FOUND "Option to Enable File Swap on DataSpaces Server" ON)
+    add_definitions(-DDSPACES_HAVE_FILEBACKEND)
+endif()
 
 include(CheckLanguage)
 check_language(Fortran)
