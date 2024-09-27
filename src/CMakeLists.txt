@@ -35,8 +35,8 @@ set_target_properties (dspaces
 
 set(dspaces-server-src util.c bbox.c ss_data.c dspaces-server.c dspaces-conf.c dspaces-modules.c dspaces-logging.c toml.c)
 
-if(FILEBACKEND_FOUND)
-    list(APPEND dspaces-server-src file_storage/policy.c)
+if(ENABLE_FILE_STORAGE)
+    list(APPEND dspaces-server-src file_storage/policy.c file_storage/file.c)
 endif()
 
 if(HDF5_FOUND)

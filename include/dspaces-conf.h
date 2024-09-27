@@ -5,7 +5,7 @@
 #include "dspaces-remote.h"
 #include "list.h"
 
-#ifdef DSPACES_HAVE_FILEBACKEND
+#ifdef DSPACES_HAVE_FILE_STORAGE
 #include "file_storage/policy.h"
 #endif
 

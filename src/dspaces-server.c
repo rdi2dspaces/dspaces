@@ -18,8 +18,6 @@
 #include "str_hash.h"
 #include "toml.h"
 #include "util.h"
-#include "file_storage/policy.h"
-#include "file_storage/file_hdf5.h"
 #include <abt.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -33,6 +31,14 @@
 #include <unistd.h>
 #ifdef OPS_USE_OPENMP
 #include <omp.h>
+#endif
+
+#ifdef DSPACES_HAVE_FILE_STORAGE
+#include "file_storage/policy.h"
+#endif
+
+#ifdef DSPACES_HAVE_HDF5
+#include "file_storage/file_hdf5.h"
 #endif
 
 #ifdef DSPACES_HAVE_PYTHON

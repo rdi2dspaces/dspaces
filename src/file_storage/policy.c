@@ -1,3 +1,5 @@
+#ifdef DSPACES_HAVE_FILE_STORAGE
+
 #include "stdlib.h"
 #include "stdio.h"
 
@@ -52,15 +54,15 @@ void memory_quota_parser(char* str, struct swap_config* swap)
     pch = strtok(str, "%");
     if(pch !=NULL) {
         /* Check if the input string is a percentage number */
-        swap->mem_quota_type = 1;
+        swap->mem_quota_type = DS_MEM_PERCENT;
         swap->mem_quota.percent = strtof(pch, NULL) / 100.0;
     } else if (sscanf(str, "%f %n", &ftmp, &len) && !str[len]) {
         /* Check if the input string is a float number */
-        swap->mem_quota_type = 1;
+        swap->mem_quota_type = DS_MEM_PERCENT;
         swap->mem_quota.percent = ftmp;
     } else if((pch=strtok(str, "kKmMgGtT")) != NULL) {
         /* Check if the input string is a real value with quantity */
-        swap->mem_quota_type = 0;
+        swap->mem_quota_type = DS_MEM_BYTES;
         ftmp = strtof(pch, &pch);
         // Check if the last char is 'B'(Byte) or 'b'(bit)
         if(*(pch+1) == 'b')
@@ -79,7 +81,7 @@ void memory_quota_parser(char* str, struct swap_config* swap)
         // Just set the quota to 100%
         meminfo = parse_meminfo();
         if(ftmp > ((float) meminfo.MemTotalMiB)) {
-            swap->mem_quota_type = 1;
+            swap->mem_quota_type = DS_MEM_PERCENT;
             swap->mem_quota.percent = 1.0;
         }
         swap->mem_quota.MB = ftmp;
@@ -191,10 +193,10 @@ int need_swap_out(struct swap_config* swap, uint64_t size_MB)
 {
     meminfo_t meminfo = parse_meminfo();
 
-    if(swap->mem_quota_type == 0) {
+    if(swap->mem_quota_type == DS_MEM_BYTES) {
         // Use memory MB
         return value_when_policy(swap->mem_quota.MB, size_MB);
-    } else if(swap->mem_quota_type == 1) {
+    } else if(swap->mem_quota_type == DS_MEM_PERCENT) {
         // Use memory percent
         if(abs(1.0 - swap->mem_quota.percent) < 1e-6) {
             // Use full node memory
@@ -223,7 +225,7 @@ struct obj_data* which_swap_out(struct swap_config *swap,
     }  
 }
 
-
+#endif // DSPACES_HAVE_FILE_STORAGE
 
 
 
