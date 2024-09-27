@@ -2,6 +2,7 @@
 #define __DS_UTIL_H_
 
 #include <stdlib.h>
+#include <stdint.h>
 
 size_t str_len(const char *str);
 char *str_append_const(char *, const char *);
@@ -35,12 +36,12 @@ char *alloc_sprintf(const char *fmt_str, ...);
 #define MEM_PATH_LEN 256
 typedef struct {
     // Values from /proc/meminfo, in KiB or converted to MiB.
-    long long MemTotalKiB;
-    long long MemTotalMiB;
-    long long MemAvailableMiB; // -1 means no data available
-    long long SwapTotalMiB;
-    long long SwapTotalKiB;
-    long long SwapFreeMiB;
+    uint64_t MemTotalKiB;
+    uint64_t MemTotalMiB;
+    uint64_t MemAvailableMiB; // -1 means no data available
+    uint64_t SwapTotalMiB;
+    uint64_t SwapTotalKiB;
+    uint64_t SwapFreeMiB;
     // Calculated percentages
     double MemAvailablePercent; // percent of total memory that is available
     double SwapFreePercent; // percent of total swap that is free

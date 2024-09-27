@@ -264,7 +264,7 @@ static long long get_entry_fatal(const char* name, const char* buf)
     if (val < 0) {
         fprintf(stderr, "%s: fatal error, could not find entry '%s' in /proc/meminfo: %s\n", __func__,
                 name, strerror((int)-val));
-        exit(dspaces_ERR_UTILS);
+        return 0;
     }
     return val;
 }
@@ -314,9 +314,9 @@ meminfo_t parse_meminfo()
         fprintf(stderr, "could not read /proc/meminfo: 0 bytes returned\n");
     }
 
-    m.MemTotalKiB = get_entry_fatal("MemTotal:", buf);
-    m.SwapTotalKiB = get_entry_fatal("SwapTotal:", buf);
-    long long SwapFree = get_entry_fatal("SwapFree:", buf);
+    m.MemTotalKiB = (uint64_t) get_entry_fatal("MemTotal:", buf);
+    m.SwapTotalKiB = (uint64_t) get_entry_fatal("SwapTotal:", buf);
+    long long SwapFree = (uint64_t) get_entry_fatal("SwapFree:", buf);
 
     long long MemAvailable = get_entry("MemAvailable:", buf);
     if (MemAvailable < 0) {
@@ -338,9 +338,9 @@ meminfo_t parse_meminfo()
 
     // Convert kiB to MiB
     m.MemTotalMiB = m.MemTotalKiB >> 10;
-    m.MemAvailableMiB = MemAvailable >> 10;
+    m.MemAvailableMiB = ((uint64_t)(MemAvailable)) >> 10;
     m.SwapTotalMiB = m.SwapTotalKiB >> 10;
-    m.SwapFreeMiB = SwapFree >> 10;
+    m.SwapFreeMiB = ((uint64_t) SwapFree) >> 10;
 
     return m;
 }
