@@ -1224,7 +1224,6 @@ static int server_destroy(dspaces_provider_t server)
     }
 
     free_sspace(server->dsg);
-    remove_dir_rf(server->conf.swap.file_dir);
     free_ls_od_list(&server->dsg->ls_od_list);
     ls_free(server->dsg->ls);
     free(server->dsg);
