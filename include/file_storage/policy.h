@@ -8,10 +8,21 @@
 
 /* Server swap space configuration parameters */
 typedef enum mem_value_type {DS_MEM_BYTES, DS_MEM_PERCENT} ds_mem_val_t;
+
+typedef enum file_type {
+#ifdef DSPACES_HAVE_HDF5
+    DS_FILE_HDF5, 
+#endif
+#ifdef DSPACES_HAVE_NetCDF
+    DS_FILE_NetCDF
+#endif
+} ds_file_t;
+
 struct swap_config
 {
     char *file_dir;
     ds_mem_val_t mem_quota_type;
+    ds_file_t file_backend;
     char *policy;
     float disk_quota_MB;
     union {

@@ -313,6 +313,7 @@ static void parse_modules_table(toml_table_t *modules, struct ds_conf *conf)
 #endif
 }
 
+#ifdef DSPACES_HAVE_FILE_STORAGE
 static void parse_swap_table_after_default(toml_table_t *swap, struct ds_conf *conf)
 {
     toml_datum_t dat;
@@ -353,10 +354,16 @@ static inline void set_default_swap(struct ds_conf *conf)
 {
     conf->swap.file_dir = strdup("./dspaces_swap/");
     conf->swap.mem_quota_type = DS_MEM_PERCENT;
+#ifdef DSPACES_HAVE_HDF5
+    conf->swap.file_backend = DS_FILE_HDF5;
+#elif DSPACES_HAVE_NetCDF
+    conf->swap.file_backend = DS_FILE_NetCDF;
+#endif // file backend selection
     conf->swap.mem_quota.percent = 1.0;
     conf->swap.policy = strdup("Default");
     conf->swap.disk_quota_MB = -1.0;
 }
+#endif // DSPACES_HAVE_FILE_STORAGE
 
 int parse_conf_toml(const char *fname, struct ds_conf *conf)
 {
@@ -411,11 +418,13 @@ int parse_conf_toml(const char *fname, struct ds_conf *conf)
         parse_modules_table(modules, conf);
     }
 
+#ifdef DSPACES_HAVE_FILE_STORAGE
     set_default_swap(conf);
     swap = toml_table_in(toml_conf, "swap space");
     if(swap) {
         parse_swap_table_after_default(swap, conf);
     }
+#endif
 
     toml_free(toml_conf);
 

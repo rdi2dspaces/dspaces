@@ -9,9 +9,9 @@
 // TODO: add NetCDF support
 #endif
 
-int file_write_od(struct swap_config* swap_conf, struct obj_data *od, ds_file_t ftype)
+int file_write_od(struct swap_config* swap_conf, struct obj_data *od)
 {
-    switch (ftype)
+    switch (swap_conf->file_backend)
     {
 #ifdef DSPACES_HAVE_HDF5
     case DS_FILE_HDF5:
@@ -29,8 +29,8 @@ int file_write_od(struct swap_config* swap_conf, struct obj_data *od, ds_file_t 
         break;
     }
 }
-int file_read_od(struct swap_config* swap_conf, struct obj_data *od, ds_file_t ftype) {
-    switch (ftype)
+int file_read_od(struct swap_config* swap_conf, struct obj_data *od) {
+    switch (swap_conf->file_backend)
     {
 #ifdef DSPACES_HAVE_HDF5
     case DS_FILE_HDF5:

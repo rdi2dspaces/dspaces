@@ -18,6 +18,7 @@
 #include "str_hash.h"
 #include "toml.h"
 #include "util.h"
+
 #include <abt.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -34,11 +35,7 @@
 #endif
 
 #ifdef DSPACES_HAVE_FILE_STORAGE
-#include "file_storage/policy.h"
-#endif
-
-#ifdef DSPACES_HAVE_HDF5
-#include "file_storage/file_hdf5.h"
+#include "file_storage/file.h"
 #endif
 
 #ifdef DSPACES_HAVE_PYTHON
@@ -1276,6 +1273,39 @@ static void odsc_take_ownership(dspaces_provider_t server, obj_descriptor *odsc)
     }
 }
 
+static int od_swap_out(dspaces_provider_t server)
+{
+    int ret;
+    struct obj_data *swap_od;
+    /* Find the od that we want to swap out */
+    ABT_mutex_lock(server->ls_mutex);
+    swap_od = which_swap_out(&server->conf.swap, &server->dsg->ls_od_list);
+    if(!swap_od) {
+        fprintf(stderr, "DATASPACES: ERROR: %s: Object data list has nothing to swap out! "
+                        "This should not happen... The primary reason could be either the "
+                        "server node memory capacity is too small, or the user-configured "
+                        "server memory quota is too small.", __func__);
+        return dspaces_ERR_UNKNOWN_OBJ;
+    }
+    
+    /* Write od to HDF5 */
+    ret = file_write_od(&server->conf.swap, swap_od);
+    if(ret != dspaces_SUCCESS) {
+        ABT_mutex_unlock(server->ls_mutex);
+        return ret;
+    }
+
+    /* Delete the od from both the local stroage list & flat list */
+    ls_remove(server->dsg->ls, swap_od);
+    list_del(&swap_od->flat_list_entry.entry);
+    ABT_mutex_unlock(server->ls_mutex);
+
+    /* Free od */
+    obj_data_free(swap_od);
+
+    return dspaces_SUCCESS;
+}
+
 static void put_rpc(hg_handle_t handle)
 {
     hg_return_t hret;
@@ -1312,33 +1342,9 @@ static void put_rpc(hg_handle_t handle)
 
     /* Check if needs to swap data out to HDF5*/
     uint64_t size_MB = obj_data_size(&in_odsc) >> 20;
-    struct obj_data_ptr_flat_list_entry *swap_od_entry;
-    struct obj_data *swap_od;
 
     while(need_swap_out(&server->conf.swap, size_MB)) {
-        /* Find the od that we want to swap out */
-        ABT_mutex_lock(server->ls_mutex);
-        swap_od = which_swap_out(&server->conf.swap, &server->dsg->ls_od_list);
-        ABT_mutex_unlock(server->ls_mutex);
-        if(!swap_od) {
-            fprintf(stderr, "DATASPACES: ERROR: %s: Object data list has nothing to swap out! "
-                            "This should not happen... The primary reason could be either the "
-                            "server node memory capacity is too small, or the user-configured "
-                            "server memory quota is too small.", __func__);
-            break;
-        }
-        
-        /* Write od to HDF5 */
-        hdf5_write_od(&server->conf.swap, swap_od);
-
-        /* Delete the od from both the local stroage list & flat list */
-        ABT_mutex_lock(server->ls_mutex);
-        ls_remove(server->dsg->ls, swap_od);
-        list_del(&swap_od->flat_list_entry.entry);
-        ABT_mutex_unlock(server->ls_mutex);
-
-        /* Free od */
-        obj_data_free(swap_od);
+        od_swap_out(server);
     }
     
     struct obj_data *od;
@@ -2226,34 +2232,11 @@ static void get_rpc(hg_handle_t handle)
 
     DEBUG_OUT("received get request\n");
 
-    struct obj_data_ptr_flat_list_entry *swap_od_entry;
-    struct obj_data *od, *from_obj, *swap_od;
+    struct obj_data *od, *from_obj;
 
     while(!(od = obj_data_alloc(&in_odsc))) {
-        /* Failed to allocate od, the primary reason is insufficient memory.
-         * Find the od that we want to swap out */
-        ABT_mutex_lock(server->ls_mutex);
-        swap_od = which_swap_out(&server->conf.swap, &server->dsg->ls_od_list);
-        ABT_mutex_unlock(server->ls_mutex);
-        if(!swap_od) {
-            fprintf(stderr, "DATASPACES: ERROR: %s: Object data list has nothing to swap out! "
-                            "This should not happen... The primary reason could be either the "
-                            "server node memory capacity is too small, or the user-configured "
-                            "server memory quota is too small.", __func__);
-            break;
-        }
-
-        /* Write od to HDF5 */
-        hdf5_write_od(&server->conf.swap, swap_od);
-
-        /* Delete the od from both the local stroage list & flat list */
-        ABT_mutex_lock(server->ls_mutex);
-        ls_remove(server->dsg->ls, swap_od);
-        list_del(&swap_od->flat_list_entry.entry);
-        
-        ABT_mutex_unlock(server->ls_mutex);
-        /* Free od */
-        obj_data_free(swap_od);
+        /* Failed to allocate od, the primary reason is insufficient memory. */
+        od_swap_out(server);
     }
     DEBUG_OUT("allocated target object\n");
 
@@ -2274,7 +2257,7 @@ static void get_rpc(hg_handle_t handle)
     if(!from_obj) {
         /* Did not find the from_obj from staging memory, 
          * search it in the swap space */
-        hdf5_read_od(&server->conf.swap, od);
+        file_read_od(&server->conf.swap, od);
     }
 
     hg_size_t size = (in_odsc.size) * bbox_volume(&(in_odsc.bb));
