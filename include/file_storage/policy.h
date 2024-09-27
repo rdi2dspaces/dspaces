@@ -7,10 +7,11 @@
 #include "ss_data.h"
 
 /* Server swap space configuration parameters */
+typedef enum mem_value_type {DS_MEM_BYTES, DS_MEM_PERCENT} ds_mem_val_t;
 struct swap_config
 {
     char *file_dir;
-    int mem_quota_type;
+    ds_mem_val_t mem_quota_type;
     char *policy;
     float disk_quota_MB;
     union {
