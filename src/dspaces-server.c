@@ -2246,6 +2246,8 @@ static void get_rpc(hg_handle_t handle)
         /* Failed to allocate od, the primary reason is insufficient memory. */
         od_swap_out(server);
     }
+#else
+    od = obj_data_alloc(&in_odsc);
 #endif // DSPACES_HAVE_FILE_STORAGE
 
     DEBUG_OUT("allocated target object\n");
