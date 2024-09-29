@@ -91,7 +91,7 @@ if(NetCDF_FOUND)
 endif()
 
 if(HDF5_FOUND OR NetCDF_FOUND)
-    set(ENABLE_FILE_STORAGE ON CACHE BOOL "Enable File Swap on DataSpaces Server")
+    set(ENABLE_FILE_STORAGE ON)
     add_definitions(-DDSPACES_HAVE_FILE_STORAGE)
 endif()
 

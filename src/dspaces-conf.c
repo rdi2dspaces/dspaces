@@ -424,7 +424,7 @@ int parse_conf_toml(const char *fname, struct ds_conf *conf)
     if(swap) {
         parse_swap_table_after_default(swap, conf);
     }
-#endif
+#endif // DSPACES_HAVE_FILE_STORAGE
 
     toml_free(toml_conf);
 

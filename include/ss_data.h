@@ -91,8 +91,10 @@ struct obj_data {
     /* Flag to mark if we should free this data object. */
     unsigned int f_free : 1;
 
+#ifdef DSPACES_HAVE_FILE_STORAGE
     /* Reference to the flat od list in local storage; Used for advanced swap policy */
     struct obj_data_ptr_flat_list_entry* ls_od_entry;
+#endif // DSPACES_HAVE_FILE_STORAGE
 };
 
 struct gdim_list_entry {
