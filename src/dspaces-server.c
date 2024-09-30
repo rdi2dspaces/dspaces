@@ -402,7 +402,9 @@ static int dsg_alloc(dspaces_provider_t server, const char *conf_name,
         goto err_free;
     }
 
+#ifdef DSPACES_HAVE_FILE_STORAGE
     INIT_LIST_HEAD(&dsg_l->ls_od_list);
+#endif // DSPACES_HAVE_FILE_STORAGE
 
     // proxy storage
     dsg_l->ps = ls_alloc(server->conf.max_versions);
@@ -2262,7 +2264,9 @@ static void get_rpc(hg_handle_t handle)
         DEBUG_OUT("found source data object from staging memory\n");
         ssd_copy(od, from_obj);
         DEBUG_OUT("copied object data\n");
+#ifdef DSPACES_HAVE_FILE_STORAGE
         from_obj->flat_list_entry.usecnt++;
+#endif // DSPACES_HAVE_FILE_STORAGE
     }
     ABT_mutex_unlock(server->ls_mutex);
 
@@ -2327,7 +2331,6 @@ static void get_rpc(hg_handle_t handle)
     out.len = csize;
     /* If we read the od back from the swap space, 
      * then we keep it in the staging memory */
-    struct obj_data_ptr_flat_list_entry *od_flat_entry;
     if(from_obj) {
         obj_data_free(od);
     }

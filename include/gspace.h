@@ -60,8 +60,10 @@ struct ds_gspace {
     /* Pending object descriptors for draining. */
     struct list_head obj_desc_drain_list;
 
+#ifdef DSPACES_HAVE_FILE_STORAGE
     /* List of object data for swap out */
     struct list_head ls_od_list;
+#endif // DSPACES_HAVE_FILE_STORAGE
 
     int rank;
     int size_sp;
