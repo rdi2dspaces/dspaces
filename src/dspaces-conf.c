@@ -114,6 +114,9 @@ int parse_conf(const char *fname, struct ds_conf *conf)
     }
 
     fclose(fin);
+#ifdef DSPACES_HAVE_FILE_STORAGE
+    set_default_swap(conf);
+#endif // DSPACES_HAVE_FILE_STORAGE
     return 0;
 }
 
